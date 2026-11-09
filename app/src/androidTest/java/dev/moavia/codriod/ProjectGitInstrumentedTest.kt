@@ -18,7 +18,7 @@ class ProjectGitInstrumentedTest {
         val root = File(context.cacheDir, "codriod-git-${UUID.randomUUID()}")
         check(root.mkdirs())
         try {
-            File(root, "README.md").writeText("# Android Git test\n")
+            File(root, "README.md").writeText("# android Git test\n")
             val git = ProjectGitService()
             git.initialize(root)
             assertEquals("main", git.snapshot(root).branch)
