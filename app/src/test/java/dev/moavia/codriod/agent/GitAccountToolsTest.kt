@@ -47,7 +47,8 @@ class GitAccountToolsTest {
         assertTrue(names.containsAll(listOf("git_account_status", "github_login_start", "github_login_verify", "git_configure", "git_test_access", "git_sync")))
 
         val status = agent.execute(call("git_account_status"), AgentMode.Agent).content
-        assertTrue(status.contains("no personal access tokens"))
+        assertTrue(status.contains("no Codriod OAuth app"))
+        assertTrue(status.contains("HTTPS access token: none"))
         assertTrue(status.contains("git@github.com:octo/app.git"))
         assertFalse(status.contains("PRIVATE", ignoreCase = false))
 

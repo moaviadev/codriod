@@ -3,4 +3,6 @@
 <full-backup-content>
     <exclude domain="file" path="git-identities/" />
     <exclude domain="file" path="git-known-hosts" />
+    <exclude domain="file" path="git-tokens/" />
+    <exclude domain="sharedpref" path="agent.xml" />
 </full-backup-content>

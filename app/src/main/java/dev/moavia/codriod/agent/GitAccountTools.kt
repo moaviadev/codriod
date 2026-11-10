@@ -14,7 +14,9 @@ data class GitAccountStatus(
     val remoteUrl: String?,
     val sshRemoteSuggestion: String?,
     val authorName: String?,
-    val authorEmail: String?
+    val authorEmail: String?,
+    /** Only whether a token exists and whose it is; never the token. */
+    val httpsToken: String? = null
 )
 
 /** Implemented by the app. Every method acts for the person holding the phone, with their own GitHub account. */
@@ -45,7 +47,9 @@ class GitAccountTools(private val bridge: GitAccountBridge, private val approver
     private val readOnly = listOf(
         ToolSpec("git_account_status",
             "Check Git and GitHub login on this phone: available Git tools, the user's SSH keys (public fingerprints only), " +
-                "which GitHub account accepted them, and this project's remote. Call this first when asked to set up GitHub.",
+                "whether they saved an access token, which GitHub account accepted them, and this project's remote. " +
+                "Call this first when asked to set up GitHub. Never ask the user to paste a token, password or key into the chat: " +
+                "tokens are entered only in Source Control > Remote.",
             schema()),
         ToolSpec("github_login_verify",
             "Confirm GitHub accepts the user's SSH key (like `ssh -T git@github.com`) and report the GitHub username. " +
@@ -143,9 +147,11 @@ class GitAccountTools(private val bridge: GitAccountBridge, private val approver
         val s = bridge.status()
         val text = buildString {
             appendLine(s.toolScan)
-            appendLine("Login method: SSH key created on this phone and added by the user to their own GitHub account " +
-                "(no Codriod OAuth app, no passwords, no personal access tokens).")
-            appendLine("Private key storage: ${s.keyStorage}.")
+            appendLine("Login methods (both owned by the user, no Codriod OAuth app or server): " +
+                "1) SSH key created on this phone and added to their GitHub account; " +
+                "2) an access token the user creates on GitHub and enters in Source Control > Remote > Access token.")
+            appendLine("Credential storage: ${s.keyStorage}.")
+            appendLine("HTTPS access token: ${s.httpsToken ?: "none"}")
             if (s.keys.isEmpty()) appendLine("SSH keys: none yet.")
             else s.keys.forEach { key ->
                 appendLine("SSH key \"${key.label}\" ${key.fingerprint}" + (if (key.isDefault) " (default)" else "") +

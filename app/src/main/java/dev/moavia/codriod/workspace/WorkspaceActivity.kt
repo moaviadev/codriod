@@ -67,8 +67,11 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
     LaunchedEffect(model.message) {
         model.message?.let { snackbar.showSnackbar(it, withDismissAction = true); model.message = null }
     }
-    BackHandler(model.project != null || model.previewOpen || model.terminalOpen || model.gitOpen) {
+    BackHandler(model.project != null || model.previewOpen || model.terminalOpen || model.gitOpen ||
+        model.addonsOpen || model.agentOpen) {
         when {
+            model.agentOpen -> model.agentOpen = false
+            model.addonsOpen -> model.addonsOpen = false
             model.gitOpen -> model.closeGit()
             model.previewOpen -> model.previewOpen = false
             model.terminalOpen -> model.terminalOpen = false
@@ -82,7 +85,7 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
                 onFiles = { model.closeGit(); model.fileSheet = true },
                 onSearch = { model.closeGit(); model.searchSheet = true },
                 onGit = model::showGit,
-                onComingSoon = { model.message = "Extensions are planned for a later phase." },
+                onComingSoon = { model.showAddons() },
                 onPreview = { model.showPreview() })
         }
     ) { insets ->
@@ -95,6 +98,12 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
                     onClone = { cloneDialog = true },
                     onOpenTerminal = onOpenOriginalTerminal
                 )
+                model.agentOpen -> dev.moavia.codriod.agent.AgentScreen(model.agent, model.project?.name,
+                    onBack = { model.agentOpen = false })
+                model.addonsOpen -> dev.moavia.codriod.agent.AddonsScreen(model.agent,
+                    onBack = { model.addonsOpen = false },
+                    onOpenAgent = { model.agentOpen = true },
+                    onOpenGit = { model.addonsOpen = false; model.showGit() })
                 model.gitOpen -> GitPanel(model)
                 model.previewOpen -> WorkspacePreview(model)
                 else -> WorkspaceEditor(model)
@@ -151,7 +160,8 @@ fun WorkspaceNav(model: WorkspaceModel, onFiles: () -> Unit, onSearch: () -> Uni
             ).forEach { (label, icon, action) ->
                 val active = (label == "Preview" && model.previewOpen) ||
                     (label == "Git" && model.gitOpen) ||
-                    (label == "Files" && model.fileSheet) || (label == "Search" && model.searchSheet)
+                    (label == "Files" && model.fileSheet) || (label == "Search" && model.searchSheet) ||
+                    (label == "Add-ons" && (model.addonsOpen || model.agentOpen))
                 TextButton(onClick = action, modifier = Modifier.weight(1f).fillMaxHeight(),
                     contentPadding = PaddingValues(vertical = 3.dp, horizontal = 2.dp),
                     colors = ButtonDefaults.textButtonColors(contentColor =

@@ -6,7 +6,11 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.moavia.codriod.agent.AgentController
+import dev.moavia.codriod.agent.AgentHost
+import dev.moavia.codriod.agent.AgentWorkspace
 import dev.moavia.codriod.agent.GitAccountBridge
+import dev.moavia.codriod.agent.ProjectAgentWorkspace
 import dev.moavia.codriod.agent.GitAccountStatus
 import dev.moavia.codriod.agent.GitKeyInfo
 import dev.moavia.codriod.git.GitAuthException
@@ -68,6 +72,19 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     val gitAccount = GitAccountController(application)
     var gitRemote by mutableStateOf<String?>(null)
         private set
+    var addonsOpen by mutableStateOf(false)
+    var agentOpen by mutableStateOf(false)
+
+    private val agentHost = object : AgentHost {
+        override fun currentProject() = project?.let { it.id to it.name }
+        override fun agentWorkspace(): AgentWorkspace? = project?.let { ProjectAgentWorkspace(store, it.id) }
+        override fun openFile() = activeDocument?.let { it.path to it.value.text }
+        override suspend fun beforeAgentRun() = saveAll()
+        override suspend fun afterAgentChangedFiles() = reloadFromDisk()
+        override val gitBridge get() = gitAccountBridge
+    }
+    /** Codriod Agent (Add-ons). Its chat is kept per project. */
+    val agent = AgentController(application, viewModelScope, agentHost)
 
     init {
         task {
@@ -155,6 +172,13 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         gitDiff = ""
         gitDiffPath = null
         persistTabs()
+        agent.bind(selected.id)
+    }
+
+    fun showAddons() {
+        gitOpen = false
+        previewOpen = false
+        addonsOpen = true
     }
 
     fun goHome() = task {
@@ -168,6 +192,9 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         previewOpen = false
         terminalOpen = false
         gitOpen = false
+        addonsOpen = false
+        agentOpen = false
+        agent.bind(null)
         prefs.edit().remove("last_project").apply()
         projects = withContext(Dispatchers.IO) { store.projects() }
     }
@@ -335,8 +362,11 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         persistTabs()
     }
 
-    fun refreshFiles() = task {
-        val current = project ?: return@task
+    fun refreshFiles() = task { reloadFromDisk() }
+
+    /** Re-reads the file list and every open tab without unsaved edits (after Git or the agent changed files). */
+    private suspend fun reloadFromDisk() {
+        val current = project ?: return
         entries = withContext(Dispatchers.IO) { store.entries(current.id) }
         for (doc in documents.filterNot { it.dirty }) {
             val disk = withContext(Dispatchers.IO) { runCatching { store.read(current.id, doc.path) }.getOrNull() }
@@ -392,11 +422,15 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
             "Add an HTML file to use web preview"
         }
         gitOpen = false
+        addonsOpen = false
+        agentOpen = false
         previewOpen = true
     }
 
     fun showGit() = task {
         saveAll()
+        addonsOpen = false
+        agentOpen = false
         previewOpen = false
         gitOpen = true
         refreshGitState()
@@ -558,6 +592,17 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         message = "GitHub login works: signed in as @$user"
     }
 
+    /** Saves an access token the user created on their own GitHub account (verified with GitHub first). */
+    fun saveGitHubToken(token: String) = task {
+        val user = remoteCall { gitAccount.saveGitHubToken(token) }
+        message = "Access token saved for @$user. HTTPS remotes on github.com now use it."
+    }
+
+    fun removeGitHubToken() = task {
+        withContext(Dispatchers.IO) { gitAccount.removeGitHubToken() }
+        message = "Token removed from this phone. Revoke it at github.com/settings/tokens too."
+    }
+
     fun trustPendingHost() {
         gitAccount.trustPendingHost()
         message = "Server trusted. Try again."
@@ -576,6 +621,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
                 toolScan = GitRemoteService.detectTools().summary,
                 keyStorage = gitAccount.keyStorage,
                 keys = gitAccount.identities.list().map { GitKeyInfo(it.label, it.fingerprint, it.verifiedUser, it.id == default) },
+                httpsToken = gitAccount.tokens.get("github.com")?.let { "saved for github.com" + (it.user?.let { u -> " (@$u)" } ?: "") },
                 gitInitialized = snapshot?.initialized == true,
                 remoteUrl = remoteUrl,
                 sshRemoteSuggestion = remoteUrl?.let(GitRemoteService::githubSshUrl),
@@ -635,6 +681,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        agent.stop()
         terminal?.close()
         super.onCleared()
     }

@@ -43,9 +43,13 @@ The APK is emitted at `app\build\outputs\apk\debug\app-debug.apk`.
 - `terminal-view`: vendored Termux Android terminal view
 - `ProjectGitService`: local Git operations using Eclipse JGit; it stores each
   repository in the project's private workspace
+- `agent/`: Codriod Agent, the built-in AI chat and coding agent in Add-ons. It
+  works with free, pro and local providers using the user's own API keys; see
+  [Codriod Agent](docs/codriod-agent.md)
 - `git/`: user-owned Git remote access (`GitRemoteService`, `SshIdentityStore`,
-  `CodriodHostKeys`): clone, fetch, pull and push over SSH with a key the user
-  creates on the phone; see [GitHub login](docs/github-login.md)
+  `GitTokenStore`, `CodriodHostKeys`): clone, fetch, pull and push, over SSH with a
+  key the user creates on the phone or over HTTPS with an access token the user
+  created on GitHub; see [GitHub login](docs/github-login.md)
 - `TerminalExecutionBackend`: separate execution abstraction; `LocalShellBackend`
   is implemented and `SshBackend` is intentionally unsupported
 - `SessionManager`: session creation, resize, input, termination, and cleanup
@@ -53,10 +57,11 @@ The APK is emitted at `app\build\outputs\apk\debug\app-debug.apk`.
 The workspace Git panel initializes a repository, reviews staged/unstaged changes,
 previews text diffs, stages and unstages files, records commits, lists history, and
 creates or checks out local branches. Branch checkout requires a clean working tree.
-Its Remote tab signs in to the user's own GitHub account with an SSH key, sets the
-origin remote, and fetches, pulls and pushes; Home can clone a repository. Codriod has
-no GitHub OAuth app and never asks for passwords or tokens. Merge conflict resolution
-is not implemented yet.
+Its Remote tab signs in to the user's own GitHub account, either with an SSH key or
+with an access token the user created on GitHub. It also sets the origin remote and
+fetches, pulls and pushes. Home can clone a repository. Codriod has no GitHub OAuth
+app and never asks for a GitHub password. Merge conflict resolution is not
+implemented yet.
 
 The local shell is `/system/bin/sh` with a pseudo-terminal, not an embedded
 Linux distribution or Termux package bootstrap. Basic Android shell commands
