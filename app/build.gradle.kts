@@ -39,7 +39,7 @@ android {
         // their native library folder). Keep its symbols: stripping can break the loader.
         jniLibs {
             useLegacyPackaging = true
-            keepDebugSymbols += setOf("**/libproot.so", "**/libproot-loader.so", "**/libproot-loader32.so", "**/libtalloc.so")
+            keepDebugSymbols += setOf("**/libproot.so", "**/libproot-loader.so", "**/libproot-loader32.so", "**/libtalloc.so", "**/libandroid-shmem.so")
         }
         resources {
             excludes += setOf("META-INF/versions/9/OSGI-INF/MANIFEST.MF", "META-INF/DEPENDENCIES")

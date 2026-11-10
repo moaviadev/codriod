@@ -7,6 +7,7 @@
 #   libproot-loader.so   proot's loader (runs the Ubuntu programs)
 #   libproot-loader32.so loader for 32-bit programs (64-bit phones only)
 #   libtalloc.so         talloc, which proot links against
+#   libandroid-shmem.so  System V shared memory for Android (proot --sysvipc)
 #
 # proot is GPL-2.0 (https://github.com/termux/proot), talloc LGPL-3.0 (https://talloc.samba.org).
 # Needs: bash, curl, ar (binutils), tar with xz, sha256sum, patchelf, readelf.
@@ -37,7 +38,7 @@ for pair in aarch64:arm64-v8a x86_64:x86_64; do
   dir="$WORK/$arch"; mkdir -p "$dir"
   echo "== $arch ($abi)"
   fetch "$REPO/dists/stable/main/binary-$arch/Packages" -o "$dir/Packages"
-  for pkg in proot libtalloc; do
+  for pkg in proot libtalloc libandroid-shmem; do
     read -r file sha < <(field "$dir/Packages" "$pkg")
     if [ -z "${file:-}" ] || [ -z "${sha:-}" ]; then echo "error: $pkg not found for $arch" >&2; exit 1; fi
     echo "   $pkg: $file"
@@ -58,13 +59,18 @@ for pair in aarch64:arm64-v8a x86_64:x86_64; do
   # Termux's library path; the app sets LD_LIBRARY_PATH to its native library folder.
   patchelf --set-soname libtalloc.so "$OUT/$abi/libtalloc.so"
   patchelf --replace-needed libtalloc.so.2 libtalloc.so "$OUT/$abi/libproot.so"
+  shm="$dir/libandroid-shmem/data/data/com.termux/files/usr/lib/libandroid-shmem.so"
+  install -m 0644 "$(readlink -f "$shm")" "$OUT/$abi/libandroid-shmem.so"
   patchelf --remove-rpath "$OUT/$abi/libproot.so" || true
-  needed="$(readelf -d "$OUT/$abi/libproot.so" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | tr '\n' ' ')"
-  echo "   proot needs: $needed"
-  for lib in $needed; do
-    case "$lib" in libc.so|libdl.so|libm.so|liblog.so|libtalloc.so) ;;
-      *) echo "error: proot needs $lib, which is not bundled" >&2; exit 1 ;;
-    esac
+  patchelf --remove-rpath "$OUT/$abi/libandroid-shmem.so" || true
+  for so in libproot.so libtalloc.so libandroid-shmem.so; do
+    needed="$(readelf -d "$OUT/$abi/$so" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | tr '\n' ' ')"
+    echo "   $so needs: $needed"
+    for lib in $needed; do
+      case "$lib" in libc.so|libdl.so|libm.so|liblog.so|libtalloc.so|libandroid-shmem.so) ;;
+        *) echo "error: $so needs $lib, which is not bundled" >&2; exit 1 ;;
+      esac
+    done
   done
 done
 echo "proot ready in $OUT"

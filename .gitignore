@@ -10,3 +10,4 @@ termux-reference/
 # proot binaries are downloaded at build time (scripts/fetch-proot.sh)
 app/src/main/jniLibs/*/libproot*.so
 app/src/main/jniLibs/*/libtalloc.so
+app/src/main/jniLibs/*/libandroid-shmem.so
