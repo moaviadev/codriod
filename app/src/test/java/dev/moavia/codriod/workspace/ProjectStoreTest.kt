@@ -7,6 +7,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.File
+import java.io.IOException
 
 class ProjectStoreTest {
     @get:Rule val temporaryFolder = TemporaryFolder()
@@ -64,6 +66,59 @@ class ProjectStoreTest {
         assertThrows(IllegalArgumentException::class.java) {
             store.write(project.id, "README.md", "x".repeat(ProjectStore.MAX_TEXT_BYTES + 1))
         }
+    }
+
+    @Test
+    fun failedReplacementRestoresThePreviousFile() {
+        val store = store()
+        val project = store.createProject("swap", "Empty")
+        val dir = store.root(project.id)
+        val file = File(dir, "doc.txt").apply { writeText("before") }
+        val temp = File(dir, ".codriod-write-test").apply { writeText("after") }
+        val moves = mutableListOf<Pair<String, String>>()
+        val error = assertThrows(IOException::class.java) {
+            store.replace(temp, file, "doc.txt") { from, to ->
+                moves += from.name to to.name
+                from != temp && from.renameTo(to)
+            }
+        }
+        temp.delete() // write() always removes its temp file, even when saving fails
+        assertTrue(error.message!!.contains("previous file preserved"))
+        assertEquals(4, moves.size)
+        assertEquals(".codriod-write-test" to "doc.txt", moves[0])
+        assertTrue(moves[1].first == "doc.txt" && moves[1].second.startsWith(".codriod-swap-"))
+        assertEquals(".codriod-write-test" to "doc.txt", moves[2])
+        assertEquals(moves[1].second to "doc.txt", moves[3])
+        assertEquals("before", file.readText())
+        assertTrue(dir.listFiles()!!.none { it.name.startsWith(".codriod-write-") || it.name.startsWith(".codriod-swap-") })
+    }
+
+    @Test
+    fun previousFileIsKeptWhenRestoreAlsoFails() {
+        val store = store()
+        val project = store.createProject("survive", "Empty")
+        val dir = store.root(project.id)
+        val file = File(dir, "doc.txt").apply { writeText("before") }
+        val temp = File(dir, ".codriod-write-test").apply { writeText("after") }
+        val error = assertThrows(IOException::class.java) {
+            store.replace(temp, file, "doc.txt") { from, to -> from != temp && to != file && from.renameTo(to) }
+        }
+        val backup = dir.listFiles()!!.single { it.name.startsWith(".codriod-swap-") }
+        assertEquals("before", backup.readText())
+        assertTrue(error.message!!.contains("previous file kept as ${backup.name}"))
+    }
+
+    @Test
+    fun savingOntoAFolderFailsAndKeepsItsFiles() {
+        val store = store()
+        val project = store.createProject("onto", "Empty")
+        store.createEntry(project.id, "src", folder = true)
+        store.createEntry(project.id, "src/keep.txt", folder = false)
+        store.write(project.id, "src/keep.txt", "before")
+        assertThrows(IOException::class.java) { store.write(project.id, "src", "text") }
+        assertEquals("before", store.read(project.id, "src/keep.txt"))
+        assertTrue(store.entries(project.id).any { it.path == "src" && it.directory })
+        assertTrue(store.root(project.id).listFiles()!!.none { it.name.startsWith(".codriod-write-") || it.name.startsWith(".codriod-swap-") })
     }
 
     @Test

@@ -342,7 +342,12 @@ ls -la
     }
 
     /** A real file path for a project file when there is one (for sharing or attaching to the agent). */
-    fun fileOrNull(id: String, path: String): File? = if (usesSaf(id)) null else runCatching { resolve(id, path) }.getOrNull()
+    fun fileOrNull(id: String, path: String): File? {
+        if (usesSaf(id)) return null
+        // resolve checks the path is inside this project; return the file as the project's storage folder spells
+        // it, because canonicalFile can rewrite the path (Windows 8.3 short names, symlinks).
+        return runCatching { resolve(id, path) }.getOrNull()?.let { File(localRoot(id) ?: File(directory, id), path) }
+    }
 
     @Synchronized
     fun write(id: String, path: String, text: String) {
@@ -354,8 +359,21 @@ ls -la
         val temp = File(file.parentFile, ".codriod-write-" + UUID.randomUUID())
         try {
             temp.outputStream().use { it.write(bytes); it.fd.sync() }
-            if (!temp.renameTo(file)) throw IOException("Could not save $path; previous file preserved")
+            replace(temp, file, path)
         } finally { temp.delete() }
+    }
+
+    /** Puts [temp] where [file] is without ever losing the previous content: File.renameTo replaces
+     * atomically on Android and Linux, but on Windows it cannot replace, so the previous file is moved
+     * aside first, renamed back when the new one cannot be moved in, and only then cleaned up. */
+    internal fun replace(temp: File, file: File, path: String, move: (File, File) -> Boolean = File::renameTo) {
+        if (move(temp, file)) return
+        if (!file.isFile) throw IOException("Could not save $path; previous file preserved")
+        val backup = File(file.parentFile, ".codriod-swap-" + UUID.randomUUID())
+        if (!move(file, backup)) throw IOException("Could not save $path; previous file preserved")
+        if (move(temp, file)) { backup.delete(); return }
+        if (move(backup, file)) throw IOException("Could not save $path; previous file preserved")
+        throw IOException("Could not save $path; previous file kept as ${backup.name}")
     }
 
     @Synchronized

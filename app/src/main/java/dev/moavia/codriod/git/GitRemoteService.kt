@@ -84,7 +84,7 @@ class GitRemoteService(private val identities: SshIdentityStore, private val hos
 
         /** Looks for command-line tools on PATH. Stock Android ships none of them. */
         fun detectTools(path: String? = System.getenv("PATH")): ToolScan {
-            val dirs = (path ?: "").split(':').filter { it.isNotBlank() } + listOf("/system/bin", "/system/xbin", "/vendor/bin")
+            val dirs = (path ?: "").split(File.pathSeparatorChar).filter { it.isNotBlank() } + listOf("/system/bin", "/system/xbin", "/vendor/bin")
             fun find(name: String) = dirs.distinct().map { File(it, name) }.firstOrNull { it.isFile && it.canExecute() }?.path
             return ToolScan(find("git"), find("gh"), find("ssh"))
         }
@@ -141,11 +141,24 @@ class GitRemoteService(private val identities: SshIdentityStore, private val hos
         transport(value, identity) {
             val command = Git.cloneRepository().setURI(value).setDirectory(target).setCloneAllBranches(false)
             branch?.takeIf { it.isNotBlank() }?.let { command.setBranch("refs/heads/$it") }
-            progress?.let { command.setProgressMonitor(PercentMonitor(it)) }
-            command.configure(identity, value).call().use { git ->
-                    // An empty remote has no branch yet; start on "main" like new local projects.
-                    if (git.repository.resolve(Constants.HEAD) == null) git.repository.updateRef(Constants.HEAD).link("refs/heads/main")
-                    identity?.let { git.repository.config.apply { setString("codriod", null, IDENTITY_KEY, it.id); save() } }
+            val monitor = progress?.let { PercentMonitor(it) }
+            monitor?.let { command.setProgressMonitor(it) }
+            command.setNoCheckout(true).configure(identity, value).call().use { git ->
+                    // Files must land on disk exactly as Git stores them: the repository pins its own line-ending
+                    // rule before the first checkout so a gitconfig on this machine (core.autocrlf) cannot rewrite them.
+                    git.repository.config.apply {
+                        setBoolean("core", null, "autocrlf", false)
+                        identity?.let { setString("codriod", null, IDENTITY_KEY, it.id) }
+                        save()
+                    }
+                    if (git.repository.resolve(Constants.HEAD) != null) {
+                        val checkout = git.checkout().setName(git.repository.branch)
+                        monitor?.let { checkout.setProgressMonitor(it) }
+                        checkout.call()
+                    } else {
+                        // An empty remote has no branch yet; start on "main" like new local projects.
+                        git.repository.updateRef(Constants.HEAD).link("refs/heads/main")
+                    }
                 }
         }
         progress?.invoke(100)

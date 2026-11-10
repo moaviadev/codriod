@@ -6,7 +6,11 @@ android {
     namespace 'com.termux.emulator'
     compileSdk 36
     ndkVersion '28.2.13676358'
-
+    testOptions {
+        unitTests {
+            returnDefaultValues = true
+        }
+    }
     defaultConfig {
         minSdk 21
         consumerProguardFiles 'proguard-rules.pro'
