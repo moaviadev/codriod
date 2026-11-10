@@ -1,15 +1,19 @@
 package dev.moavia.codriod.workspace
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import dev.moavia.codriod.MainActivity
@@ -42,6 +46,18 @@ class WorkspaceActivity : ComponentActivity() {
 
 @Composable
 private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Unit, modifier: Modifier) {
+    val context = LocalContext.current
+    val openFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, flags)
+            }
+            model.openFolderUri(uri)
+        }
+    }
     var createDialog by remember { mutableStateOf(false) }
     var newEntry by remember { mutableStateOf<String?>(null) }
     var renameEntry by remember { mutableStateOf<ProjectEntry?>(null) }
@@ -71,7 +87,12 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
     ) { insets ->
         Box(Modifier.fillMaxSize().padding(insets)) {
             when {
-                model.project == null -> WorkspaceHome(model, { createDialog = true }, onOpenOriginalTerminal)
+                model.project == null -> WorkspaceHome(
+                    model = model,
+                    onCreate = { createDialog = true },
+                    onOpenFolder = { openFolderLauncher.launch(null) },
+                    onOpenTerminal = onOpenOriginalTerminal
+                )
                 model.gitOpen -> GitPanel(model)
                 model.previewOpen -> WorkspacePreview(model)
                 else -> WorkspaceEditor(model)

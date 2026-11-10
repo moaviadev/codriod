@@ -16,6 +16,7 @@ prototype; the plan's React web prototype is a separate proposed stage.
 
 The native Projects, editor, local shell, preview, local Git tools and VS Code-inspired
 dark/light theme are described in [workspace implementation notes](docs/workspace-implementation.md).
+The strict UI architecture and design system rules are defined in [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md).
 
 ## Build
 

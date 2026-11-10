@@ -32,14 +32,14 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.net.URLDecoder
 
-data class PreviewAsset(val file: File, val mime: String)
+data class PreviewAsset(val mime: String, val openStream: () -> java.io.InputStream)
 
 class PreviewFiles(private val store: ProjectStore, private val projectId: String) {
     fun resolve(encodedPath: String): PreviewAsset? = runCatching {
         val path = URLDecoder.decode(encodedPath.replace("+", "%2B"), "UTF-8").removePrefix("/")
-        val file = store.resolve(projectId, path.ifEmpty { "index.html" })
-        require(file.isFile && file.length() <= 16 * 1024 * 1024)
-        val mime = when (file.extension.lowercase()) {
+        val safePath = path.ifEmpty { "index.html" }
+        val ext = safePath.substringAfterLast('.', "").lowercase()
+        val mime = when (ext) {
             "html", "htm" -> "text/html"
             "css" -> "text/css"
             "js", "mjs" -> "application/javascript"
@@ -55,7 +55,13 @@ class PreviewFiles(private val store: ProjectStore, private val projectId: Strin
             "txt", "md" -> "text/plain"
             else -> error("Unsupported preview asset")
         }
-        PreviewAsset(file, mime)
+        val file = runCatching { store.resolve(projectId, safePath) }.getOrNull()
+        if (file != null && file.isFile && file.length() <= 16 * 1024 * 1024) {
+            PreviewAsset(mime) { file.inputStream() }
+        } else {
+            val content = store.read(projectId, safePath)
+            PreviewAsset(mime) { ByteArrayInputStream(content.toByteArray(Charsets.UTF_8)) }
+        }
     }.getOrNull()
 }
 
@@ -80,7 +86,7 @@ private class LocalPreviewClient(private val files: PreviewFiles) : WebViewClien
                 "Content-Security-Policy" to "default-src 'self' data: blob:; " +
                     "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
                     "connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'"
-            ), asset.file.inputStream())
+            ), asset.openStream())
         } catch (_: Exception) {
             WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream("Could not read file".toByteArray()))
         }

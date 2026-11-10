@@ -18,7 +18,7 @@ class EditorDocument(val path: String, initial: String) {
 }
 
 class WorkspaceModel(application: Application) : AndroidViewModel(application) {
-    val store = ProjectStore(File(application.filesDir, "workspaces"))
+    val store = ProjectStore(File(application.filesDir, "workspaces"), application)
     private val prefs = application.getSharedPreferences("workspace", 0)
     var themeMode by mutableStateOf(prefs.getString("theme", "System") ?: "System")
         private set
@@ -91,15 +91,38 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         loadProject(created)
     }
 
+    fun openFolderUri(uri: android.net.Uri) = task {
+        val context = getApplication<Application>()
+        val doc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+        val folderName = doc?.name?.takeIf { it.isNotBlank() } ?: "Folder"
+        val project = withContext(Dispatchers.IO) {
+            store.openTreeFolder(folderName, uri.toString())
+        }
+        projects = withContext(Dispatchers.IO) { store.projects() }
+        loadProject(project)
+    }
+
     fun openProject(selected: Project) = task { loadProject(selected) }
 
     private suspend fun loadProject(selected: Project) {
+        if (selected.treeUri != null) {
+            val helper = SafWorkspaceHelper(getApplication())
+            if (!helper.hasPermission(selected.treeUri)) {
+                message = "Access to '${selected.name}' was revoked or is unavailable. Please re-open the folder."
+                return
+            }
+        }
         terminal?.close()
         terminal = null
         documents.clear()
         project = withContext(Dispatchers.IO) { store.touch(selected) }
         projects = withContext(Dispatchers.IO) { store.projects() }
-        entries = withContext(Dispatchers.IO) { store.entries(selected.id) }
+        entries = withContext(Dispatchers.IO) {
+            runCatching { store.entries(selected.id) }.getOrElse {
+                message = it.message ?: "Cannot read folder contents"
+                emptyList()
+            }
+        }
         val paths = prefs.getString("tabs_" + selected.id, null)?.split('\n').orEmpty()
         for (path in paths.take(12)) {
             val text = withContext(Dispatchers.IO) { runCatching { store.read(selected.id, path) }.getOrNull() }
@@ -109,8 +132,8 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
             val initial = entries.firstOrNull { it.path == "index.html" || it.path == "main.sh" }
                 ?: entries.firstOrNull { !it.directory }
             if (initial != null) {
-                val text = withContext(Dispatchers.IO) { store.read(selected.id, initial.path) }
-                documents.add(EditorDocument(initial.path, text))
+                val text = withContext(Dispatchers.IO) { runCatching { store.read(selected.id, initial.path) }.getOrNull() }
+                if (text != null) documents.add(EditorDocument(initial.path, text))
             }
         }
         activePath = prefs.getString("active_" + selected.id, null)

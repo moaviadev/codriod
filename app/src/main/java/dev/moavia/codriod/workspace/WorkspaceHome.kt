@@ -1,5 +1,6 @@
 package dev.moavia.codriod.workspace
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -10,21 +11,32 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.Image
 import dev.moavia.codriod.R
 
 @Composable
-fun WorkspaceHome(model: WorkspaceModel, onCreate: () -> Unit, onOpenTerminal: () -> Unit) {
+fun WorkspaceHome(
+    model: WorkspaceModel,
+    onCreate: () -> Unit,
+    onOpenFolder: () -> Unit,
+    onOpenTerminal: () -> Unit
+) {
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("All") }
     var exploreOpen by remember { mutableStateOf(false) }
-    val matches = model.projects.filter {
-        it.name.contains(query, true) && (filter != "SSH servers")
+    val matches = model.projects.filter { project ->
+        val matchesQuery = project.name.contains(query, true)
+        val matchesFilter = when (filter) {
+            "Folders" -> project.treeUri != null
+            "This phone" -> project.treeUri == null
+            "SSH servers" -> false
+            else -> true
+        }
+        matchesQuery && matchesFilter
     }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 12.dp),
@@ -56,11 +68,16 @@ fun WorkspaceHome(model: WorkspaceModel, onCreate: () -> Unit, onOpenTerminal: (
             verticalAlignment = Alignment.CenterVertically) {
             Text("PROJECTS", style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-            listOf("All", "This phone", "SSH servers").forEach { label ->
-                val name = when (label) { "This phone" -> "Phone"; "SSH servers" -> "SSH"; else -> "All" }
+            listOf("All", "Folders", "This phone", "SSH servers").forEach { label ->
+                val name = when (label) {
+                    "This phone" -> "Phone"
+                    "Folders" -> "Folders"
+                    "SSH servers" -> "SSH"
+                    else -> "All"
+                }
                 FilterChip(selected = filter == label, onClick = { filter = label },
                     label = { Text(name, fontSize = 11.sp, maxLines = 1) },
-                    modifier = Modifier.padding(start = 5.dp))
+                    modifier = Modifier.padding(start = 4.dp))
             }
         }
         OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth()
@@ -73,8 +90,19 @@ fun WorkspaceHome(model: WorkspaceModel, onCreate: () -> Unit, onOpenTerminal: (
                 Text("A new workspace\nstarts with an idea.",
                     style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(10.dp))
-                Text("Create a small web project, edit it on your phone, and run its preview here.",
+                Text("Create a new project or open an existing folder from your phone storage to browse and edit code.",
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(20.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = onCreate, modifier = Modifier.height(44.dp)) {
+                        ToolGlyph(ToolIcon.Plus, MaterialTheme.colorScheme.onPrimary)
+                        Spacer(Modifier.width(8.dp)); Text("New project")
+                    }
+                    OutlinedButton(onClick = onOpenFolder, modifier = Modifier.height(44.dp)) {
+                        ToolGlyph(ToolIcon.Folder, MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(8.dp)); Text("Open folder")
+                    }
+                }
             }
         } else {
             LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp)) {
@@ -114,13 +142,20 @@ fun WorkspaceHome(model: WorkspaceModel, onCreate: () -> Unit, onOpenTerminal: (
         }
         Surface(color = MaterialTheme.colorScheme.background, tonalElevation = 1.dp) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 9.dp)) {
-                Button(onClick = onCreate, modifier = Modifier.fillMaxWidth().height(44.dp),
-                    contentPadding = PaddingValues(8.dp)) {
-                    ToolGlyph(ToolIcon.Plus, MaterialTheme.colorScheme.onPrimary)
-                    Spacer(Modifier.width(8.dp)); Text("New project")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = onCreate, modifier = Modifier.weight(1f).height(44.dp),
+                        contentPadding = PaddingValues(8.dp)) {
+                        ToolGlyph(ToolIcon.Plus, MaterialTheme.colorScheme.onPrimary)
+                        Spacer(Modifier.width(6.dp)); Text("New project")
+                    }
+                    OutlinedButton(onClick = onOpenFolder, modifier = Modifier.weight(1f).height(44.dp),
+                        contentPadding = PaddingValues(8.dp)) {
+                        ToolGlyph(ToolIcon.Folder, MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(6.dp)); Text("Open folder")
+                    }
                 }
                 Spacer(Modifier.height(5.dp))
-                Text("Projects stay in this app's private storage.",
+                Text("Create in private storage or open folders from device storage.",
                     modifier = Modifier.align(Alignment.CenterHorizontally),
                     color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
             }
@@ -130,16 +165,35 @@ fun WorkspaceHome(model: WorkspaceModel, onCreate: () -> Unit, onOpenTerminal: (
 
 @Composable
 private fun ProjectRow(project: Project, onClick: () -> Unit) {
+    val isFolder = project.treeUri != null
     Column {
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp))
             .clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            ToolGlyph(ToolIcon.Folder, MaterialTheme.colorScheme.primary)
+            ToolGlyph(ToolIcon.Folder, if (isFolder) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(11.dp))
             Column(Modifier.weight(1f)) {
-                Text(project.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(project.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                    if (isFolder) {
+                        Spacer(Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.padding(horizontal = 2.dp)
+                        ) {
+                            Text(
+                                "STORAGE",
+                                fontSize = 9.sp,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
                 Spacer(Modifier.height(2.dp))
-                Text("${project.template} · Local · ${relativeTime(project.modified)}",
+                val typeLabel = if (isFolder) "External folder" else "${project.template} · Local"
+                Text("$typeLabel · ${relativeTime(project.modified)}",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1)
             }

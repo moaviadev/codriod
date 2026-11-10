@@ -1,0 +1,6 @@
+{
+  "name": "Codriod",
+  "description": "Android IDE and Terminal Emulator workspace",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

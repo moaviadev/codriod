@@ -1,5 +1,6 @@
 package dev.moavia.codriod.workspace
 
+import android.content.Context
 import java.io.File
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -7,26 +8,48 @@ import java.nio.charset.CodingErrorAction
 import java.util.Properties
 import java.util.UUID
 
-data class Project(val id: String, val name: String, val template: String, val modified: Long)
+data class Project(
+    val id: String,
+    val name: String,
+    val template: String,
+    val modified: Long,
+    val treeUri: String? = null
+)
 data class ProjectEntry(val path: String, val directory: Boolean)
 data class SearchHit(val path: String, val line: Int, val text: String)
 
-/** App-private projects. All editor and preview access passes through the same boundary. */
-class ProjectStore(private val directory: File) {
+/** App-private projects and SAF external workspaces. All editor and preview access passes through the same boundary. */
+class ProjectStore(private val directory: File, private val context: Context? = null) {
     companion object {
         const val MAX_TEXT_BYTES = 256 * 1024
         private const val META = ".codriod-project.properties"
     }
 
+    private val saf = context?.let { SafWorkspaceHelper(it) }
+
     init { check(directory.isDirectory || directory.mkdirs()) { "Cannot create project storage" } }
+
+    fun treeUri(id: String): String? {
+        val metaFile = File(File(directory, id), META)
+        return if (metaFile.exists()) {
+            runCatching {
+                Properties().apply { metaFile.inputStream().use { load(it) } }.getProperty("treeUri")
+            }.getOrNull()
+        } else null
+    }
 
     @Synchronized
     fun projects(): List<Project> = directory.listFiles().orEmpty().filter { it.isDirectory }
         .mapNotNull { folder ->
             runCatching {
                 val props = Properties().apply { File(folder, META).inputStream().use { load(it) } }
-                Project(folder.name, props.getProperty("name"), props.getProperty("template", "Files"),
-                    props.getProperty("opened", "0").toLong())
+                Project(
+                    id = folder.name,
+                    name = props.getProperty("name"),
+                    template = props.getProperty("template", "Files"),
+                    modified = props.getProperty("opened", "0").toLong(),
+                    treeUri = props.getProperty("treeUri")
+                )
             }.getOrNull()
         }.sortedByDescending { it.modified }
 
@@ -34,6 +57,11 @@ class ProjectStore(private val directory: File) {
         require(id.matches(Regex("[a-zA-Z0-9-]+"))) { "Invalid project ID" }
         val root = File(directory, id).canonicalFile
         require(root.parentFile == directory.canonicalFile && root.isDirectory) { "Project not found" }
+        val uri = treeUri(id)
+        if (uri != null && saf != null) {
+            val local = saf.findLocalFile(uri)
+            if (local != null) return local
+        }
         return root
     }
 
@@ -113,6 +141,23 @@ ls -la
     }
 
     @Synchronized
+    fun openTreeFolder(name: String, treeUri: String): Project {
+        val cleanName = name.trim().ifEmpty { "Opened Folder" }.take(64)
+        val existing = projects().firstOrNull { it.treeUri == treeUri }
+        if (existing != null) {
+            val updated = existing.copy(name = cleanName, modified = System.currentTimeMillis())
+            saveMetadata(updated)
+            return updated
+        }
+        val id = "saf-" + UUID.randomUUID().toString()
+        val folder = File(directory, id)
+        check(folder.mkdir()) { "Cannot create workspace metadata folder" }
+        val project = Project(id, cleanName, "Folder", System.currentTimeMillis(), treeUri)
+        saveMetadata(project)
+        return project
+    }
+
+    @Synchronized
     fun touch(project: Project) = project.copy(modified = System.currentTimeMillis()).also(::saveMetadata)
 
     private fun saveMetadata(project: Project) {
@@ -120,11 +165,18 @@ ls -la
             setProperty("name", project.name)
             setProperty("template", project.template)
             setProperty("opened", project.modified.toString())
+            project.treeUri?.let { setProperty("treeUri", it) }
         }
-        File(root(project.id), META).outputStream().use { props.store(it, "Codriod project") }
+        val dir = File(directory, project.id)
+        if (!dir.exists()) dir.mkdirs()
+        File(dir, META).outputStream().use { props.store(it, "Codriod project") }
     }
 
     fun entries(id: String): List<ProjectEntry> {
+        val uri = treeUri(id)
+        if (uri != null && saf != null) {
+            return saf.entries(uri)
+        }
         val root = root(id)
         val entries = mutableListOf<ProjectEntry>()
         fun visit(folder: File, depth: Int) {
@@ -145,6 +197,10 @@ ls -la
     }
 
     fun read(id: String, path: String): String {
+        val uri = treeUri(id)
+        if (uri != null && saf != null) {
+            return saf.read(uri, path)
+        }
         val file = resolve(id, path)
         require(file.isFile) { "File not found" }
         require(file.length() <= MAX_TEXT_BYTES) { "Editor supports text files up to 256 KB" }
@@ -156,6 +212,11 @@ ls -la
 
     @Synchronized
     fun write(id: String, path: String, text: String) {
+        val uri = treeUri(id)
+        if (uri != null && saf != null) {
+            saf.write(uri, path, text)
+            return
+        }
         val file = resolve(id, path)
         val bytes = text.toByteArray(Charsets.UTF_8)
         require(bytes.size <= MAX_TEXT_BYTES) { "Editor supports text files up to 256 KB" }
@@ -169,6 +230,11 @@ ls -la
 
     @Synchronized
     fun createEntry(id: String, path: String, folder: Boolean) {
+        val uri = treeUri(id)
+        if (uri != null && saf != null) {
+            saf.createEntry(uri, path, folder)
+            return
+        }
         val target = resolve(id, path)
         require(!target.exists()) { "A file or folder already uses this name" }
         require(target.parentFile?.isDirectory == true) { "Parent folder not found" }
@@ -177,6 +243,11 @@ ls -la
 
     @Synchronized
     fun rename(id: String, old: String, new: String) {
+        val uri = treeUri(id)
+        if (uri != null && saf != null) {
+            saf.rename(uri, old, new)
+            return
+        }
         val source = resolve(id, old)
         val target = resolve(id, new)
         require(source.exists() && !target.exists()) { "Source missing or destination already exists" }
@@ -186,6 +257,11 @@ ls -la
 
     @Synchronized
     fun delete(id: String, path: String) {
+        val uri = treeUri(id)
+        if (uri != null && saf != null) {
+            saf.delete(uri, path)
+            return
+        }
         val file = resolve(id, path)
         require(file.isFile || (file.isDirectory && file.listFiles().orEmpty().isEmpty())) {
             "Only files and empty folders can be deleted"

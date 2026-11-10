@@ -65,4 +65,19 @@ class ProjectStoreTest {
             store.write(project.id, "README.md", "x".repeat(ProjectStore.MAX_TEXT_BYTES + 1))
         }
     }
+
+    @Test
+    fun openTreeFolderPersistsMetadataAndListsWorkspace() {
+        val store = store()
+        val treeUri = "content://com.android.externalstorage.documents/tree/primary%3AProjects%2FMyApp"
+        val proj = store.openTreeFolder("MyApp", treeUri)
+        assertEquals("MyApp", proj.name)
+        assertEquals(treeUri, proj.treeUri)
+        assertEquals("Folder", proj.template)
+
+        val listed = store.projects().single()
+        assertEquals("MyApp", listed.name)
+        assertEquals(treeUri, listed.treeUri)
+        assertEquals(proj.id, listed.id)
+    }
 }

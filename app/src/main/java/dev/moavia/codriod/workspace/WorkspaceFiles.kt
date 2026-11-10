@@ -53,7 +53,7 @@ fun ProjectFilesSheet(model: WorkspaceModel, onNewFile: () -> Unit, onNewFolder:
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (entry.path == model.activePath) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.onSurface, maxLines = 1)
-                        if (!entry.directory) WorkspaceIconButton(ToolIcon.Edit, "Rename $name") { onRename(entry) }
+                        WorkspaceIconButton(ToolIcon.Edit, "Rename $name") { onRename(entry) }
                         WorkspaceIconButton(ToolIcon.Delete, "Delete $name") { onDelete(entry) }
                     }
                 }

@@ -42,6 +42,7 @@ android {
 dependencies {
     implementation(project(":terminal-view"))
     implementation("org.eclipse.jgit:org.eclipse.jgit:7.7.1.202607240634-r")
+    implementation("androidx.documentfile:documentfile:1.0.1")
 
     implementation(platform("androidx.compose:compose-bom:2025.10.01"))
     implementation("androidx.activity:activity-compose:1.11.0")
