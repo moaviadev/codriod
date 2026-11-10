@@ -184,7 +184,12 @@ fun AgentChat(
         agent.pending?.let { ApprovalCard(it, agent) }
         if (agent.planAwaitingApproval && !agent.running) PlanApproval(agent, onEdit = { input = "Change the plan: " })
         Composer(agent, input, { input = it }, onAttach = { attach = true }, onContext = { contextSheet = true },
-            onSend = { agent.send(input); input = "" }, onVisionPicker = { visionPicker = true })
+            onSend = {
+                // While a step waits for approval, "yes" / "no" / "ہاں" / "نہیں" (typed or dictated) answers it.
+                val decision = agent.pending?.let { VoiceText.approvalAnswer(input) }
+                if (decision != null) agent.answer(decision) else agent.send(input)
+                input = ""
+            }, onVisionPicker = { visionPicker = true })
     }
     if (picker) ModelPickerSheet(agent, onDismiss = { picker = false }, onAddProvider = { picker = false; onOpenSettings() })
     if (visionPicker) ModelPickerSheet(agent, onDismiss = { visionPicker = false }, onAddProvider = { visionPicker = false; onOpenSettings() },
@@ -379,6 +384,7 @@ private fun toolIcon(name: String?) = when {
     name == "update_plan" -> "☑"
     name.startsWith("git") || name.startsWith("github") -> "⑂"
     name == "view_image" -> "🖼"
+    name.startsWith("linux_") -> "🐧"
     else -> "•"
 }
 
@@ -576,6 +582,7 @@ private fun ApprovalCard(pending: PendingApproval, agent: AgentController) {
             }
         }
         if (request is ApprovalRequest.Command) Text(if (danger) "This command can destroy data. It always needs your approval, even on Autopilot."
+            else if (request.command.startsWith("[ubuntu]")) "🐧 Runs in Ubuntu, in the project folder."
             else "Runs in the project folder with the phone's shell.", color = if (danger) Color(0xFFFCA5A5) else C.Dim, fontSize = 10.5.sp,
             modifier = Modifier.padding(top = 6.dp))
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -589,6 +596,8 @@ private fun ApprovalCard(pending: PendingApproval, agent: AgentController) {
                 Text(when (request) { is ApprovalRequest.Edit -> "Apply"; is ApprovalRequest.Command -> "Run"; else -> "Allow" }, fontSize = 12.sp)
             }
         }
+        Text("🎙 Or type / say “yes” or “no” (ہاں / نہیں)" + if (request is ApprovalRequest.Command && !danger) ", or “always”" else "",
+            color = C.VioletSoft, fontSize = 10.5.sp, modifier = Modifier.padding(top = 6.dp))
     }
 }
 
@@ -636,7 +645,10 @@ private fun Composer(agent: AgentController, input: String, onInput: (String) ->
         }
         voice.error?.takeIf { !voice.active }?.let { Text(it, color = C.Amber, fontSize = 11.sp, modifier = Modifier.padding(bottom = 6.dp)) }
         Box(Modifier.fillMaxWidth().heightIn(min = 34.dp, max = 160.dp)) {
-            if (input.isEmpty()) Text(if (agent.running) "Agent is working… you can type the next message" else "Ask Codriod Agent…", color = C.Dim, fontSize = 13.sp)
+            if (input.isEmpty()) Text(when {
+                agent.pending != null -> "Type or say “yes” / “no” (ہاں / نہیں)…"
+                agent.running -> "Agent is working… you can type the next message"
+                else -> "Ask Codriod AI…" }, color = C.Dim, fontSize = 13.sp)
             BasicTextField(input, onInput, textStyle = LocalTextStyle.current.copy(color = Color.White, fontSize = 13.sp, lineHeight = 19.sp),
                 cursorBrush = SolidColor(C.VioletSoft), modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()))
         }
@@ -656,13 +668,15 @@ private fun Composer(agent: AgentController, input: String, onInput: (String) ->
             Pill(if (voice.dictating) "■" else "🎤", active = voice.dictating, onClick = {
                 if (voice.dictating) voice.dictate { _, _ -> } else withMic { startDictation() }
             })
-            val canSend = !agent.running && (input.isNotBlank() || agent.attachedImages.isNotEmpty())
+            val answering = agent.pending != null && VoiceText.approvalAnswer(input) != null
+            val canSend = answering || (!agent.running && (input.isNotBlank() || agent.attachedImages.isNotEmpty()))
             val voiceButton = !agent.running && !canSend
             Box(Modifier.size(34.dp).clip(CircleShape)
-                .background(when { agent.running -> Color(0xFF3F3F46); canSend -> Color.White; else -> C.Violet })
-                .clickable { when { agent.running -> agent.stop(); canSend -> { voice.cancelDictation(); onSend() }; else -> withMic { voice.startConversation() } } },
+                .background(when { answering -> Color.White; agent.running -> Color(0xFF3F3F46); canSend -> Color.White; else -> C.Violet })
+                .clickable { when { answering -> { voice.cancelDictation(); onSend() }; agent.running -> agent.stop(); canSend -> { voice.cancelDictation(); onSend() }; else -> withMic { voice.startConversation() } } },
                 contentAlignment = Alignment.Center) {
                 when {
+                    answering -> Text("↑", color = Color(0xFF111111), fontSize = 17.sp, fontWeight = FontWeight.Bold)
                     agent.running -> Box(Modifier.size(11.dp).background(Color.White, RoundedCornerShape(2.dp)))
                     voiceButton -> LevelBars(0.35f, Color.White, animated = true)
                     else -> Text("↑", color = Color(0xFF111111), fontSize = 17.sp, fontWeight = FontWeight.Bold)
@@ -764,7 +778,11 @@ private fun VoiceScreen(agent: AgentController, onClose: () -> Unit, onModel: ()
             if (agent.running && agent.streaming.isNotBlank()) Text(agent.streaming.takeLast(280), color = C.Text, fontSize = 13.sp, lineHeight = 19.sp,
                 modifier = Modifier.padding(top = 14.dp))
             else if (voice.reply.isNotBlank()) Column(Modifier.padding(top = 14.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                .background(Color(0xFF1F1F25)).padding(12.dp)) { MarkdownBlock(voice.reply) }
+                .background(Color(0xFF1F1F25)).padding(12.dp)) {
+                Text("Last reply" + if (voice.speakReplies) " · 🔊 spoken" else " · 🔇 muted", color = C.Dim, fontSize = 10.5.sp,
+                    modifier = Modifier.padding(bottom = 4.dp))
+                MarkdownBlock(voice.reply)
+            }
             voice.error?.let { Text(it, color = C.Amber, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp),
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center) }
             voice.missingVoice?.let { name ->

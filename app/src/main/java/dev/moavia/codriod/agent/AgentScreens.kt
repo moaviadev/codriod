@@ -1,5 +1,10 @@
 package dev.moavia.codriod.agent
 
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,21 +43,23 @@ import dev.moavia.codriod.workspace.WorkspaceIconButton
 // ---------------------------------------------------------------------------------------------------
 
 private data class AddonRow(val title: String, val subtitle: String, val status: String?, val available: Boolean,
-    val onClick: (() -> Unit)? = null)
+    val onClick: (() -> Unit)? = null, val logo: String = title.take(1), val color: Long = 0xFF3F3F46,
+    val gradient: Boolean = false, val isNew: Boolean = false)
 
-/** Add-ons: one row per add-on. Codriod Agent is the first; more agents and runtimes will join the list. */
+/** Add-ons: a card per add-on with its logo and status. Codriod AI first; Linux & AI CLIs is highlighted while new. */
 @Composable
 fun AddonsScreen(agent: AgentController, onBack: () -> Unit, onOpenAgent: () -> Unit, onOpenGit: () -> Unit,
     linuxStatus: String = "Set up", onOpenLinux: (() -> Unit)? = null) {
     val code = LocalCodeColors.current
     val agentStatus = agent.provider?.let { p -> agent.modelId?.let { "${p.name} · $it" } } ?: "Set up"
     val rows = listOf(
-        AddonRow("Codriod AI", "AI chat and coding agent · ${Providers.all.size} providers, free and pro", agentStatus, true, onOpenAgent),
-        AddonRow("GitHub", "Connect with your token, see all your repositories, clone, pull and push", "Built in", true, onOpenGit),
-        AddonRow("Linux & AI CLIs", "Ubuntu, Node.js, Python and official agents: Claude Code, Codex, Gemini, Copilot and more",
-            linuxStatus, onOpenLinux != null, onOpenLinux),
-        AddonRow("Java & Kotlin", "JDK, Kotlin and Gradle tools", null, false),
-        AddonRow("More extensions", "Language servers, debuggers and themes", null, false)
+        AddonRow("Codriod AI", "AI chat and coding agent · ${Providers.all.size} providers", agentStatus, true, onOpenAgent,
+            logo = "✦", gradient = true),
+        AddonRow("GitHub", "Your token, all repos, clone, pull, push", "Built in", true, onOpenGit, logo = "⌥", color = 0xFF24292F),
+        AddonRow("Linux & AI CLIs", "Ubuntu, Node.js, Python + Claude Code, Codex, Gemini, Copilot…",
+            linuxStatus, onOpenLinux != null, onOpenLinux, logo = "🐧", color = 0xFFE95420, isNew = linuxStatus == "Set up"),
+        AddonRow("Java & Kotlin", "JDK, Kotlin and Gradle tools", null, false, logo = "J"),
+        AddonRow("More extensions", "Language servers, debuggers and themes", null, false, logo = "⧉")
     )
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Row(Modifier.fillMaxWidth().height(52.dp).background(code.header).padding(horizontal = 8.dp),
@@ -63,11 +70,12 @@ fun AddonsScreen(agent: AgentController, onBack: () -> Unit, onOpenAgent: () -> 
                 Text("Extensions and tools", style = MaterialTheme.typography.titleMedium)
             }
         }
-        LazyColumn(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item { SectionTitle("INSTALLED") }
-            items(rows.filter { it.available }) { AddonListRow(it) }
+            items(rows.filter { it.available }) { AddonCard(it) }
             item { SectionTitle("COMING SOON") }
-            items(rows.filterNot { it.available }) { AddonListRow(it) }
+            items(rows.filterNot { it.available }) { AddonCard(it) }
         }
     }
 }
@@ -75,30 +83,39 @@ fun AddonsScreen(agent: AgentController, onBack: () -> Unit, onOpenAgent: () -> 
 @Composable
 private fun SectionTitle(text: String) {
     Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 4.dp))
+        modifier = Modifier.padding(start = 2.dp, top = 12.dp))
 }
 
 @Composable
-private fun AddonListRow(row: AddonRow) {
-    Row(Modifier.fillMaxWidth().clickable(enabled = row.onClick != null) { row.onClick?.invoke() }
-        .padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(36.dp).background(if (row.available) MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
-            Text(row.title.take(1), fontWeight = FontWeight.Bold, color = if (row.available)
-                MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
+private fun AddonCard(row: AddonRow) {
+    val accent = Color(row.color)
+    val shape = RoundedCornerShape(14.dp)
+    Row(Modifier.fillMaxWidth().alpha(if (row.available) 1f else 0.55f).clip(shape)
+        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+        .border(if (row.isNew) 1.5.dp else 1.dp, if (row.isNew) accent else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), shape)
+        .clickable(enabled = row.onClick != null) { row.onClick?.invoke() }
+        .padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(40.dp).clip(RoundedCornerShape(11.dp))
+            .background(if (row.gradient) Brush.linearGradient(listOf(Color(0xFF7C3AED), Color(0xFF2563EB))) else SolidColor(accent)),
+            contentAlignment = Alignment.Center) {
+            Text(row.logo, fontWeight = FontWeight.Bold, color = Color.White, fontSize = 17.sp)
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(row.title, style = MaterialTheme.typography.titleMedium,
-                color = if (row.available) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(row.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                if (row.isNew) Text("NEW", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFDBA74),
+                    modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFF3B1D12)).padding(horizontal = 5.dp, vertical = 1.dp))
+            }
             Text(row.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.width(8.dp))
-        Badge(row.status ?: "Soon", row.available)
-        if (row.onClick != null) ToolGlyph(ToolIcon.Chevron, MaterialTheme.colorScheme.onSurfaceVariant)
+        if (row.onClick != null) Text((row.status ?: "") + " ›", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            color = if (row.isNew || row.status == "Set up") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.widthIn(max = 120.dp))
+        else Badge("Soon", false)
     }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(start = 64.dp))
 }
 
 @Composable

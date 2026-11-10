@@ -45,26 +45,46 @@ fun LinuxHubScreen(
     var showLog by remember { mutableStateOf(false) }
     var manageMenu by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf(false) }
+    var doctorPage by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(doctorPage) { doctorPage = false }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            WorkspaceIconButton(ToolIcon.Back, "Back", onBack)
+            WorkspaceIconButton(ToolIcon.Back, "Back") { if (doctorPage) doctorPage = false else onBack() }
             Column(Modifier.weight(1f).padding(start = 4.dp)) {
                 Text("LINUX & AI CLIS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Ubuntu, Node.js and official agents", style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                Text(when {
+                    doctorPage -> "Codriod Doctor"
+                    linux.phase == LinuxPhase.Installing -> "Installing…"
+                    else -> "Ubuntu, Node.js and agents"
+                }, style = MaterialTheme.typography.titleMedium, maxLines = 1)
             }
-            if (linux.ready) Box {
+            if (linux.ready && !doctorPage) Box {
                 TextButton(onClick = { manageMenu = true }) { Text("Manage") }
                 DropdownMenu(manageMenu, { manageMenu = false }) {
                     DropdownMenuItem({ Text("Open Ubuntu terminal") }, { manageMenu = false; onOpenTerminal() })
+                    DropdownMenuItem({ Text("Codriod Doctor") }, { manageMenu = false; doctorPage = true })
                     DropdownMenuItem({ Text("Update Node.js") }, { manageMenu = false; linux.installNode() })
                     DropdownMenuItem({ Text("Unpack Ubuntu again (keeps logins)") }, { manageMenu = false; linux.reinstall() })
                     DropdownMenuItem({ Text("Remove Ubuntu…", color = Red) }, { manageMenu = false; confirmRemove = true })
                 }
             }
         }
+        if (doctorPage) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                item { DoctorCard(linux) }
+                linux.problem?.let { problem -> item { ProblemCard(linux, problem, onAskAgent) } }
+                item {
+                    Text("Codriod AI gets the problem and the full log, and can run linux_run / linux_doctor to find the cause and fix it.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (linux.steps.isNotEmpty() && linux.busy) item { StepsCard(linux, showLog) { showLog = !showLog } }
+            }
+            return@Column
+        }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            item { StatusCard(linux, defaults, onOpenTerminal) }
+            item { StatusCard(linux, defaults, onOpenTerminal, onDoctor = { doctorPage = true; linux.runChecks() }) }
             if (linux.steps.isNotEmpty()) item { StepsCard(linux, showLog) { showLog = !showLog } }
             linux.problem?.let { problem -> item { ProblemCard(linux, problem, onAskAgent) } }
             if (linux.phase != LinuxPhase.Unsupported) {
@@ -76,7 +96,19 @@ fun LinuxHubScreen(
             }
             if (linux.ready) {
                 item { Section("CODRIOD DOCTOR") }
-                item { DoctorCard(linux) }
+                item {
+                    Card {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("🩺", fontSize = 22.sp)
+                            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                                Text("Health check & repair", fontWeight = FontWeight.SemiBold)
+                                Text("Runtime, Ubuntu, DNS, apt, Node.js and every CLI · fixes problems without AI",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            TextButton(onClick = { doctorPage = true }) { Text("Open ›") }
+                        }
+                    }
+                }
             }
             item {
                 Text("Everything runs on this phone. CLIs sign in with your own accounts in your browser; their logins stay in Ubuntu's " +
@@ -110,7 +142,7 @@ private fun Card(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun StatusCard(linux: LinuxEnvironment, selected: List<String>, onOpenTerminal: () -> Unit) {
+private fun StatusCard(linux: LinuxEnvironment, selected: List<String>, onOpenTerminal: () -> Unit, onDoctor: () -> Unit) {
     Card {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(42.dp).clip(RoundedCornerShape(11.dp)).background(Color(0xFFE95420)), contentAlignment = Alignment.Center) {
@@ -122,7 +154,10 @@ private fun StatusCard(linux: LinuxEnvironment, selected: List<String>, onOpenTe
                 Text(when (linux.phase) {
                     LinuxPhase.Unsupported -> "Not available on this phone"
                     LinuxPhase.NotInstalled -> "Not installed · about 1–2 GB with Node.js and CLIs"
-                    LinuxPhase.Installing -> "Installing…"
+                    LinuxPhase.Installing -> {
+                        val at = linux.steps.indexOfFirst { it.status == StepStatus.Running || it.status == StepStatus.Fixing }
+                        if (at >= 0) "Installing · step ${at + 1} of ${linux.steps.size}" else "Installing…"
+                    }
                     LinuxPhase.Ready -> "Ready · ${linux.ubuntuArch} · Node.js ${linux.nodeVersion ?: "not installed"}"
                     LinuxPhase.Broken -> "Needs repair"
                 }, style = MaterialTheme.typography.bodySmall, color = when (linux.phase) {
@@ -146,7 +181,7 @@ private fun StatusCard(linux: LinuxEnvironment, selected: List<String>, onOpenTe
             LinuxPhase.Ready -> if (linux.busy && linux.steps.isNotEmpty() && linux.checks.isEmpty() && !linux.checking) InstallProgress(linux)
             else Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onOpenTerminal, shape = RoundedCornerShape(10.dp)) { Text("Open terminal") }
-                OutlinedButton(onClick = { linux.runChecks() }, enabled = !linux.busy, shape = RoundedCornerShape(10.dp)) { Text("Check health") }
+                OutlinedButton(onClick = onDoctor, enabled = !linux.busy, shape = RoundedCornerShape(10.dp)) { Text("Check health") }
             }
         }
     }
@@ -180,7 +215,9 @@ private fun InstallProgress(linux: LinuxEnvironment) {
 private fun StepsCard(linux: LinuxEnvironment, showLog: Boolean, onToggleLog: () -> Unit) {
     Card {
         linux.steps.forEach { step ->
-            Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
+            val fixing = step.status == StepStatus.Fixing
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(9.dp)).background(if (fixing) Amber.copy(alpha = 0.12f) else Color.Transparent)
+                .padding(vertical = 4.dp, horizontal = if (fixing) 4.dp else 0.dp), verticalAlignment = Alignment.Top) {
                 Box(Modifier.width(24.dp), contentAlignment = Alignment.Center) {
                     when (step.status) {
                         StepStatus.Running, StepStatus.Fixing -> CircularProgressIndicator(Modifier.size(15.dp), strokeWidth = 2.dp,
@@ -245,6 +282,26 @@ private fun CliCard(linux: LinuxEnvironment, cli: CliSpec, selected: Boolean, on
     val version = linux.installed[cli.id]
     val busy = linux.busyCli == cli.id
     var menu by remember { mutableStateOf(false) }
+    if (!linux.ready && version == null) {
+        // Before the first install: compact rows with a tick, like a checklist.
+        Card {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable(enabled = linux.phase != LinuxPhase.Installing, onClick = onSelect)) {
+                Box(Modifier.size(38.dp).clip(RoundedCornerShape(10.dp)).background(Color(cli.color)), contentAlignment = Alignment.Center) {
+                    Text(cli.name.take(1), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                }
+                Column(Modifier.weight(1f).padding(start = 11.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(cli.name, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        if (cli.experimental) Text("  beta", style = MaterialTheme.typography.labelSmall, color = Amber)
+                    }
+                    Text("${cli.vendor} · ${cli.signIn}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Checkbox(checked = selected, onCheckedChange = { onSelect() }, enabled = linux.phase != LinuxPhase.Installing)
+            }
+        }
+        return
+    }
     Card {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(38.dp).clip(RoundedCornerShape(10.dp)).background(Color(cli.color)), contentAlignment = Alignment.Center) {
@@ -259,8 +316,7 @@ private fun CliCard(linux: LinuxEnvironment, cli: CliSpec, selected: Boolean, on
                 Text("${cli.vendor} · ${if (version != null) "installed ${version.ifBlank { "" }}".trim() else "not installed"}",
                     style = MaterialTheme.typography.labelSmall, color = if (version != null) Green else MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (!linux.ready && version == null) Checkbox(checked = selected, onCheckedChange = { onSelect() }, enabled = linux.phase != LinuxPhase.Installing)
-            else if (version != null) Box {
+            if (version != null) Box {
                 TextButton(onClick = { menu = true }) { Text("⋯", fontSize = 18.sp) }
                 DropdownMenu(menu, { menu = false }) {
                     DropdownMenuItem({ Text("Update") }, { menu = false; linux.installCli(cli.id) })
