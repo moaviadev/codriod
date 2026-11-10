@@ -1,6 +1,6 @@
 package dev.moavia.codriod.agent
 
-import com.sun.net.httpserver.HttpServer
+import dev.moavia.codriod.TestHttpServer
 import dev.moavia.codriod.workspace.ProjectStore
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
@@ -12,7 +12,6 @@ import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import java.net.InetSocketAddress
 
 class AgentEngineTest {
     @get:Rule val temp = TemporaryFolder()
@@ -181,28 +180,21 @@ class AgentEngineTest {
     }
 
     @Test fun clientTalksToOpenAiAndAnthropicStyleServers() = runBlocking {
-        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val headers = mutableMapOf<String, String?>()
-        fun reply(ex: com.sun.net.httpserver.HttpExchange, code: Int, body: String) {
-            val bytes = body.toByteArray(); ex.sendResponseHeaders(code, bytes.size.toLong()); ex.responseBody.use { it.write(bytes) }
+        val server = TestHttpServer { req ->
+            when (req.path) {
+                "/v1/models" -> { headers["models"] = req.header("Authorization")
+                    TestHttpServer.Response(200, """{"data":[{"id":"m-1"},{"id":"m-2"}]}""") }
+                "/v1/chat/completions" -> { headers["chat"] = req.header("Authorization")
+                    if (JSONObject(req.body).getString("model") == "bad") TestHttpServer.Response(401, """{"error":{"message":"Invalid API key"}}""")
+                    else TestHttpServer.Response(200, """{"choices":[{"message":{"content":"hi there","tool_calls":[{"id":"x","type":"function","function":{"name":"list_files","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}""") }
+                "/a/v1/messages" -> { headers["anthropic"] = req.header("x-api-key") + "|" + req.header("anthropic-version")
+                    TestHttpServer.Response(200, """{"content":[{"type":"text","text":"ok"},{"type":"tool_use","id":"tu","name":"read_file","input":{"path":"a"}}],"stop_reason":"tool_use","usage":{"input_tokens":3,"output_tokens":1}}""") }
+                else -> TestHttpServer.Response(404)
+            }
         }
-        server.createContext("/v1/models") { ex ->
-            headers["models"] = ex.requestHeaders.getFirst("Authorization")
-            reply(ex, 200, """{"data":[{"id":"m-1"},{"id":"m-2"}]}""")
-        }
-        server.createContext("/v1/chat/completions") { ex ->
-            headers["chat"] = ex.requestHeaders.getFirst("Authorization")
-            val body = JSONObject(ex.requestBody.readBytes().toString(Charsets.UTF_8))
-            if (body.getString("model") == "bad") reply(ex, 401, """{"error":{"message":"Invalid API key"}}""")
-            else reply(ex, 200, """{"choices":[{"message":{"content":"hi there","tool_calls":[{"id":"x","type":"function","function":{"name":"list_files","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}""")
-        }
-        server.createContext("/a/v1/messages") { ex ->
-            headers["anthropic"] = ex.requestHeaders.getFirst("x-api-key") + "|" + ex.requestHeaders.getFirst("anthropic-version")
-            reply(ex, 200, """{"content":[{"type":"text","text":"ok"},{"type":"tool_use","id":"tu","name":"read_file","input":{"path":"a"}}],"stop_reason":"tool_use","usage":{"input_tokens":3,"output_tokens":1}}""")
-        }
-        server.start()
         try {
-            val base = "http://127.0.0.1:${server.address.port}"
+            val base = server.baseUrl
             val spec = ProviderSpec("test", "Test", ApiStyle.OpenAI, "$base/v1", Tier.Free)
             assertEquals(listOf("m-1", "m-2"), LlmClient().listModels(spec, "k1", "$base/v1").map { it.id })
             assertEquals("Bearer k1", headers["models"])
@@ -215,7 +207,7 @@ class AgentEngineTest {
             val a = LlmClient().chat(claude, "sk-ant", "$base/a/v1", "c", "sys", listOf(ChatMessage(Role.User, "hi")), AgentTools.baseSpecs(AgentMode.Ask))
             assertEquals("ok", a.text); assertEquals("""{"path":"a"}""", a.toolCalls.single().arguments)
             assertEquals("sk-ant|2023-06-01", headers["anthropic"])
-        } finally { server.stop(0) }
+        } finally { server.close() }
     }
 
     @Test fun everyProviderIsWellFormed() {

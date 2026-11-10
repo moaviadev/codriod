@@ -1,6 +1,7 @@
 package dev.moavia.codriod.git
 
-import com.sun.net.httpserver.HttpServer
+import dev.moavia.codriod.TestHttpServer
+import dev.moavia.codriod.TestHttpServer.Response
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -12,13 +13,12 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
-import java.net.InetSocketAddress
 import java.util.Base64
 
 /** The user's own access token: sealed at rest, verified with GitHub's /user, sent only to its host. */
 class GitTokenTest {
     @get:Rule val temp = TemporaryFolder()
-    private lateinit var server: HttpServer
+    private lateinit var server: TestHttpServer
     private val token = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
     private val seenAuth = mutableListOf<String?>()
 
@@ -31,31 +31,27 @@ class GitTokenTest {
     private fun pkt(line: String) = String.format("%04x", line.toByteArray().size + 4) + line
 
     @Before fun start() {
-        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        server.createContext("/user") { ex ->
-            val ok = ex.requestHeaders.getFirst("Authorization") == "Bearer $token"
-            val body = if (ok) """{"login":"octo-cat","id":1}""" else """{"message":"Bad credentials"}"""
-            ex.sendResponseHeaders(if (ok) 200 else 401, body.length.toLong()); ex.responseBody.use { it.write(body.toByteArray()) }
-        }
-        server.createContext("/repo.git/info/refs") { ex ->
-            val auth = ex.requestHeaders.getFirst("Authorization")
-            seenAuth += auth
-            val expected = "Basic " + Base64.getEncoder().encodeToString("x-access-token:$token".toByteArray())
-            if (auth != expected) {
-                ex.responseHeaders.add("WWW-Authenticate", "Basic realm=\"test\"")
-                ex.sendResponseHeaders(401, -1); ex.close(); return@createContext
+        server = TestHttpServer { req ->
+            when {
+                req.path == "/user" -> if (req.header("Authorization") == "Bearer $token")
+                    Response(200, """{"login":"octo-cat","id":1}""") else Response(401, """{"message":"Bad credentials"}""")
+                req.path.startsWith("/repo.git/info/refs") -> {
+                    val auth = req.header("Authorization")
+                    seenAuth += auth
+                    val expected = "Basic " + Base64.getEncoder().encodeToString("x-access-token:$token".toByteArray())
+                    if (auth != expected) Response(401, "", mapOf("WWW-Authenticate" to "Basic realm=\"test\""))
+                    else Response(200, pkt("# service=git-upload-pack\n") + "0000" +
+                        pkt("0000000000000000000000000000000000000000 capabilities^{}\u0000side-band-64k\n") + "0000",
+                        mapOf("Content-Type" to "application/x-git-upload-pack-advertisement"))
+                }
+                else -> Response(404)
             }
-            val body = pkt("# service=git-upload-pack\n") + "0000" +
-                pkt("0000000000000000000000000000000000000000 capabilities^{}\u0000side-band-64k\n") + "0000"
-            ex.responseHeaders.add("Content-Type", "application/x-git-upload-pack-advertisement")
-            ex.sendResponseHeaders(200, body.length.toLong()); ex.responseBody.use { it.write(body.toByteArray()) }
         }
-        server.start()
     }
 
-    @After fun stop() = server.stop(0)
+    @After fun stop() = server.close()
 
-    private val base get() = "http://127.0.0.1:${server.address.port}"
+    private val base get() = server.baseUrl
 
     @Test fun tokenIsSealedVerifiedAndOnlyUsedForItsHost() {
         val tokens = GitTokenStore(temp.newFolder("tokens"), XorVault, githubApi = base)
