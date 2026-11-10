@@ -92,6 +92,11 @@ class AgentController(context: Context, private val scope: CoroutineScope, priva
     private val appContext = context.applicationContext
     private val prefs: SharedPreferences = appContext.getSharedPreferences("agent", Context.MODE_PRIVATE)
     private val client = LlmClient()
+    internal val llm get() = client
+    /** Voice chat: speech recognition, spoken replies and the hands-free loop. */
+    private val voiceHolder = lazy { VoiceController(appContext, scope, this) }
+    val voice: VoiceController by voiceHolder
+    fun releaseVoice() { if (voiceHolder.isInitialized()) voice.release() }
     private val root = File(appContext.filesDir, "agent")
     private val chatsRoot = File(root, "chats")
     private val imagesDir = File(root, "images")
@@ -174,7 +179,7 @@ class AgentController(context: Context, private val scope: CoroutineScope, priva
 
     val provider get() = Providers.byId(providerId)
     val ready get() = provider != null && !modelId.isNullOrBlank()
-    val visionModel get() = modelId?.let(ModelCaps::vision) == true
+    val visionModel get() = modelId?.let { canSee(providerId, it) } == true
 
     init { imagesDir.mkdirs() }
 
@@ -196,11 +201,16 @@ class AgentController(context: Context, private val scope: CoroutineScope, priva
         revision++
     }
 
-    fun models(spec: ProviderSpec): List<ModelInfo> = prefs.getString("models_${spec.id}", null)?.let { json ->
+    private val modelCache = HashMap<String, List<ModelInfo>>()
+
+    fun models(spec: ProviderSpec): List<ModelInfo> = modelCache.getOrPut(spec.id) { loadModels(spec) }
+
+    private fun loadModels(spec: ProviderSpec): List<ModelInfo> = prefs.getString("models_${spec.id}", null)?.let { json ->
         runCatching {
             val array = JSONArray(json)
             (0 until array.length()).map { i -> array.getJSONObject(i).let {
-                ModelInfo(it.getString("id"), it.optBoolean("free"), it.optInt("ctx")) } }
+                ModelInfo(it.getString("id"), it.optBoolean("free"), it.optInt("ctx"),
+                    if (it.has("vis")) it.optBoolean("vis") else null) } }
         }.getOrNull()
     } ?: spec.fallbackModels.map { ModelInfo(it) }
 
@@ -215,14 +225,45 @@ class AgentController(context: Context, private val scope: CoroutineScope, priva
         scope.launch {
             try {
                 val list = client.listModels(spec, key(spec.id), baseUrl(spec))
-                val json = JSONArray().apply { list.forEach { put(JSONObject().put("id", it.id).put("free", it.free).put("ctx", it.contextLength)) } }
+                val json = JSONArray().apply { list.forEach { put(JSONObject().put("id", it.id).put("free", it.free).put("ctx", it.contextLength)
+                    .apply { it.vision?.let { v -> put("vis", v) } }) } }
                 prefs.edit().putString("models_${spec.id}", json.toString()).apply()
+                modelCache.remove(spec.id)
                 revision++
                 done(list.size, null)
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) { val m = error.message ?: "Could not load models"; fetchErrors[spec.id] = m; done(null, m) }
             finally { fetching[spec.id] = false }
         }
+    }
+
+    // ---- images ---------------------------------------------------------------------------------------------
+
+    private fun visionOverrides(): JSONObject = runCatching { JSONObject(prefs.getString("vision_overrides", "{}")!!) }.getOrDefault(JSONObject())
+
+    /** The user's choice for a model, if they set one: true = sees images, false = text only. */
+    fun visionOverride(provider: String?, model: String): Boolean? =
+        visionOverrides().let { if (it.has("$provider/$model")) it.optBoolean("$provider/$model") else null }
+
+    /** Whether the model takes images: the user's choice, then the provider's model list, then a guess from the name. */
+    fun canSee(provider: String?, model: String): Boolean {
+        visionOverride(provider, model)?.let { return it }
+        val spec = Providers.byId(provider)
+        val info = spec?.let { s -> models(s).firstOrNull { it.id == model } }
+        return info?.vision ?: ModelCaps.vision(model)
+    }
+
+    /** Marks a model as able (or not able) to see images; null goes back to automatic. */
+    fun setVisionOverride(provider: String, model: String, value: Boolean?) {
+        val json = visionOverrides()
+        if (value == null) json.remove("$provider/$model") else json.put("$provider/$model", value)
+        prefs.edit().putString("vision_overrides", json.toString()).apply()
+        revision++
+    }
+
+    /** Configured models that can see images, for "switch to a vision model". */
+    fun visionModels(): List<Pair<ProviderSpec, String>> = configured().flatMap { spec ->
+        models(spec).filter { canSee(spec.id, it.id) }.map { spec to it.id }
     }
 
     fun select(spec: ProviderSpec, model: String) {
@@ -455,7 +496,8 @@ class AgentController(context: Context, private val scope: CoroutineScope, priva
         persist()
     }
 
-    fun send(text: String) {
+    /** [voice] = the message was spoken; the answer is read aloud, so the model is asked to answer briefly in plain speech. */
+    fun send(text: String, voice: Boolean = false) {
         val prompt = text.trim()
         if ((prompt.isEmpty() && attachedImages.isEmpty()) || running) return
         if (host.currentProject() == null) { messages += ChatMessage(Role.Error, "Open a project first."); return }
@@ -464,10 +506,11 @@ class AgentController(context: Context, private val scope: CoroutineScope, priva
         if (!hasKey(spec)) { messages += ChatMessage(Role.Error, "Add your ${spec.name} API key in Agent settings → Providers."); return }
         val repaired = ChatHistoryJson.repair(messages.toList())
         messages.clear(); messages.addAll(repaired)
-        val labels = attachedContext.map { it.label }
+        val labels = attachedContext.map { it.label } + if (voice) listOf("🎙 Voice") else emptyList()
         messages += ChatMessage(Role.User, prompt.ifEmpty { "See the attached image." }, images = attachedImages.toList(),
             detail = if (labels.isEmpty()) null else "CTX " + labels.joinToString("|"))
         pendingContext = attachedContext.joinToString("\n\n") { it.text }
+        if (voice) pendingContext = (pendingContext + "\n\n" + VoiceText.PROMPT_NOTE).trim()
         attachedImages.clear(); attachedContext.clear()
         if (chatId == null) {
             chatId = UUID.randomUUID().toString()
@@ -511,8 +554,8 @@ class AgentController(context: Context, private val scope: CoroutineScope, priva
             try {
                 host.beforeAgentRun()
                 val workspace = host.agentWorkspace() ?: error("Open a project first")
-                val vision = ModelCaps.vision(model)
-                val browserTools = if (browserEnabled) host.browserTools({ ModelCaps.vision(model) }) { shot ->
+                val vision = canSee(spec.id, model)
+                val browserTools = if (browserEnabled) host.browserTools({ vision }) { shot ->
                     main.post { liveShot = shot; usingBrowser = true }
                 } else null
                 val toolsets = listOfNotNull(

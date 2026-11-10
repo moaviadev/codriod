@@ -1,12 +1,16 @@
 package dev.moavia.codriod.agent
 
+import android.Manifest
 import android.content.Intent
 import android.graphics.BitmapFactory
-import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,7 +36,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -143,6 +151,7 @@ fun AgentChat(
     onTakeOver: () -> Unit
 ) {
     var picker by remember { mutableStateOf(false) }
+    var visionPicker by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf(false) }
     var attach by remember { mutableStateOf(false) }
     var contextSheet by remember { mutableStateOf(false) }
@@ -150,6 +159,19 @@ fun AgentChat(
 
     if (!agent.ready && !agent.onboarded) {
         AgentOnboarding(agent, onClose = onClose)
+        return
+    }
+    val voice = agent.voice
+    var wasRunning by remember { mutableStateOf(agent.running) }
+    LaunchedEffect(agent.running) {
+        if (wasRunning && !agent.running && voice.readReplies && !voice.active)
+            agent.messages.lastOrNull()?.takeIf { it.role == Role.Assistant }?.let { voice.read(it.text) }
+        wasRunning = agent.running
+    }
+    DisposableEffect(Unit) { onDispose { voice.endConversation(); voice.cancelDictation() } }
+    if (voice.active) {
+        VoiceScreen(agent, onClose = { voice.endConversation() }, onModel = { picker = true })
+        if (picker) ModelPickerSheet(agent, onDismiss = { picker = false }, onAddProvider = { picker = false; voice.endConversation(); onOpenSettings() })
         return
     }
     Column(Modifier.fillMaxSize().background(C.Panel)) {
@@ -162,9 +184,11 @@ fun AgentChat(
         agent.pending?.let { ApprovalCard(it, agent) }
         if (agent.planAwaitingApproval && !agent.running) PlanApproval(agent, onEdit = { input = "Change the plan: " })
         Composer(agent, input, { input = it }, onAttach = { attach = true }, onContext = { contextSheet = true },
-            onSend = { agent.send(input); input = "" })
+            onSend = { agent.send(input); input = "" }, onVisionPicker = { visionPicker = true })
     }
     if (picker) ModelPickerSheet(agent, onDismiss = { picker = false }, onAddProvider = { picker = false; onOpenSettings() })
+    if (visionPicker) ModelPickerSheet(agent, onDismiss = { visionPicker = false }, onAddProvider = { visionPicker = false; onOpenSettings() },
+        initialFilter = "Vision")
     if (history) HistorySheet(agent, onDismiss = { history = false })
     if (attach) AttachSheet(agent, onDismiss = { attach = false })
     if (contextSheet) ContextSheet(agent, onDismiss = { contextSheet = false })
@@ -182,6 +206,7 @@ private fun ChatHeader(agent: AgentController, onModel: () -> Unit, onHistory: (
             Spacer(Modifier.width(7.dp))
             Text(agent.modelId ?: "Choose model", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 150.dp))
+            if (agent.visionModel) Text(" 👁", fontSize = 10.sp)
             Text("  ▾", color = C.Muted, fontSize = 10.sp)
         }
         Spacer(Modifier.width(6.dp))
@@ -300,7 +325,7 @@ private fun MessageView(agent: AgentController, message: ChatMessage, isLast: Bo
         Role.User -> UserBubble(message)
         Role.Assistant -> Column {
             MarkdownBlock(message.text)
-            if (!agent.running && isLast) CopyRow(message.text)
+            if (!agent.running || !isLast) CopyRow(agent, message.text)
         }
         Role.Tool -> ToolRow(message)
         Role.Error -> Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFF2A1515))
@@ -315,10 +340,13 @@ private fun MessageView(agent: AgentController, message: ChatMessage, isLast: Bo
 }
 
 @Composable
-private fun CopyRow(text: String) {
+private fun CopyRow(agent: AgentController, text: String) {
     val clipboard = LocalClipboardManager.current
-    Row(Modifier.padding(top = 4.dp)) {
-        Text("Copy", fontSize = 10.5.sp, color = C.Dim, modifier = Modifier.clickable { clipboard.setText(AnnotatedString(text)) }.padding(4.dp))
+    val reading = agent.voice.reading == text
+    Row(Modifier.padding(top = 2.dp)) {
+        Text("⧉ Copy", fontSize = 10.5.sp, color = C.Dim, modifier = Modifier.clickable { clipboard.setText(AnnotatedString(text)) }.padding(4.dp))
+        Text(if (reading) "■ Stop" else "🔊 Read", fontSize = 10.5.sp, color = if (reading) C.VioletSoft else C.Dim,
+            modifier = Modifier.clickable { if (reading) agent.voice.stopSpeaking() else agent.voice.read(text) }.padding(4.dp))
     }
 }
 
@@ -567,18 +595,46 @@ private fun ApprovalCard(pending: PendingApproval, agent: AgentController) {
 // ---- composer ------------------------------------------------------------------------------------
 
 @Composable
-private fun Composer(agent: AgentController, input: String, onInput: (String) -> Unit, onAttach: () -> Unit, onContext: () -> Unit, onSend: () -> Unit) {
+private fun Composer(agent: AgentController, input: String, onInput: (String) -> Unit, onAttach: () -> Unit, onContext: () -> Unit,
+    onSend: () -> Unit, onVisionPicker: () -> Unit) {
     var modeMenu by remember { mutableStateOf(false) }
-    val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { onInput((input + " " + it).trim()) }
+    val voice = agent.voice
+    val currentInput by rememberUpdatedState(input)
+    var dictationBase by remember { mutableStateOf("") }
+    fun startDictation() {
+        dictationBase = currentInput.trimEnd()
+        voice.dictate { text, _ -> onInput((dictationBase + " " + text).trim()) }
     }
+    var afterPermission by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) afterPermission?.invoke()
+        afterPermission = null
+    }
+    fun withMic(action: () -> Unit) {
+        if (voice.hasMicPermission()) action() else { afterPermission = action; micPermission.launch(Manifest.permission.RECORD_AUDIO) }
+    }
+    val photos = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris -> uris.take(6).forEach { agent.attachImage(it) } }
     Column(Modifier.padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp))
-        .background(Color(0xFF202026)).border(1.dp, Color(0xFF3A3A42), RoundedCornerShape(16.dp)).padding(horizontal = 10.dp, vertical = 9.dp)) {
+        .background(Color(0xFF202026)).border(1.dp, if (voice.dictating) C.Violet else Color(0xFF3A3A42), RoundedCornerShape(16.dp))
+        .padding(horizontal = 10.dp, vertical = 9.dp)) {
         if (agent.attachedImages.isNotEmpty() || agent.attachedContext.isNotEmpty()) Row(Modifier.padding(bottom = 7.dp).horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             agent.attachedImages.toList().forEach { path -> Thumb(path, 46, 46) { agent.attachedImages.remove(path) } }
             agent.attachedContext.toList().forEach { item -> Chip(item.label + "  ✕") { agent.attachedContext.remove(item) } }
         }
+        if (agent.attachedImages.isNotEmpty() && !agent.visionModel) Row(Modifier.padding(bottom = 7.dp).fillMaxWidth().clip(RoundedCornerShape(9.dp))
+            .background(Color(0xFF2B2410)).padding(horizontal = 9.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("${agent.modelId ?: "This model"} can't see images.", color = C.Amber, fontSize = 11.sp, modifier = Modifier.weight(1f))
+            Text(if (agent.visionModels().isEmpty()) "Add a 👁 provider" else "Switch to 👁 model", color = C.VioletSoft, fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold, modifier = Modifier.clickable(onClick = onVisionPicker).padding(start = 6.dp))
+        }
+        if (voice.dictating) Row(Modifier.padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            LevelBars(voice.level, C.VioletSoft)
+            Text("  Listening… tap 🎤 to finish", color = C.VioletSoft, fontSize = 11.sp)
+            Spacer(Modifier.weight(1f))
+            Text("Cancel", color = C.Dim, fontSize = 11.sp, modifier = Modifier.clickable { voice.cancelDictation(); onInput(dictationBase) }.padding(4.dp))
+        }
+        voice.error?.takeIf { !voice.active }?.let { Text(it, color = C.Amber, fontSize = 11.sp, modifier = Modifier.padding(bottom = 6.dp)) }
         Box(Modifier.fillMaxWidth().heightIn(min = 34.dp, max = 160.dp)) {
             if (input.isEmpty()) Text(if (agent.running) "Agent is working… you can type the next message" else "Ask Codriod Agent…", color = C.Dim, fontSize = 13.sp)
             BasicTextField(input, onInput, textStyle = LocalTextStyle.current.copy(color = Color.White, fontSize = 13.sp, lineHeight = 19.sp),
@@ -586,7 +642,8 @@ private fun Composer(agent: AgentController, input: String, onInput: (String) ->
         }
         Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Pill("＋", onClick = onAttach)
-            Pill("@ Context", onClick = onContext)
+            if (agent.visionModel) Pill("🖼", onClick = { photos.launch("image/*") })
+            Pill("@", onClick = onContext)
             Box {
                 val (fg, _) = modeColor(agent.mode)
                 Text(when (agent.mode) { AgentMode.Ask -> "💬 Ask"; AgentMode.Plan -> "🧭 Plan"; AgentMode.Agent -> "⚡ Agent"; AgentMode.Autopilot -> "🚀 Auto" } + " ▾",
@@ -595,21 +652,151 @@ private fun Composer(agent: AgentController, input: String, onInput: (String) ->
                         .padding(horizontal = 9.dp, vertical = 5.dp))
                 ModeMenu(modeMenu, agent.mode, { modeMenu = false }) { agent.updateMode(it) }
             }
-            Pill("🎤", onClick = {
-                runCatching {
-                    voice.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                        .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                        .putExtra(RecognizerIntent.EXTRA_PROMPT, "Tell Codriod Agent what to do"))
-                }
-            })
             Spacer(Modifier.weight(1f))
+            Pill(if (voice.dictating) "■" else "🎤", active = voice.dictating, onClick = {
+                if (voice.dictating) voice.dictate { _, _ -> } else withMic { startDictation() }
+            })
             val canSend = !agent.running && (input.isNotBlank() || agent.attachedImages.isNotEmpty())
-            Box(Modifier.size(34.dp).clip(CircleShape).background(if (agent.running) Color(0xFF3F3F46) else if (canSend) Color.White else Color(0xFF3F3F46))
-                .clickable(enabled = agent.running || canSend) { if (agent.running) agent.stop() else onSend() }, contentAlignment = Alignment.Center) {
-                if (agent.running) Box(Modifier.size(11.dp).background(Color.White, RoundedCornerShape(2.dp)))
-                else Text("↑", color = if (canSend) Color(0xFF111111) else C.Dim, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            val voiceButton = !agent.running && !canSend
+            Box(Modifier.size(34.dp).clip(CircleShape)
+                .background(when { agent.running -> Color(0xFF3F3F46); canSend -> Color.White; else -> C.Violet })
+                .clickable { when { agent.running -> agent.stop(); canSend -> { voice.cancelDictation(); onSend() }; else -> withMic { voice.startConversation() } } },
+                contentAlignment = Alignment.Center) {
+                when {
+                    agent.running -> Box(Modifier.size(11.dp).background(Color.White, RoundedCornerShape(2.dp)))
+                    voiceButton -> LevelBars(0.35f, Color.White, animated = true)
+                    else -> Text("↑", color = Color(0xFF111111), fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
+    }
+}
+
+/** Four little bars that follow the microphone level (or breathe when [animated]). */
+@Composable
+private fun LevelBars(level: Float, color: Color, animated: Boolean = false) {
+    val transition = rememberInfiniteTransition(label = "bars")
+    val wave by transition.animateFloat(0f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "wave")
+    Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+        listOf(0.55f, 1f, 0.75f, 0.45f).forEachIndexed { i, weight ->
+            val l = if (animated) 0.35f + 0.4f * (if (i % 2 == 0) wave else 1f - wave) else level
+            Box(Modifier.width(3.dp).height((4f + 12f * weight * l.coerceIn(0.1f, 1f)).dp).clip(RoundedCornerShape(2.dp)).background(color))
+        }
+    }
+}
+
+// ---- voice conversation ----------------------------------------------------------------------------
+
+/** Hands-free voice chat: listen → agent works → reply is spoken → listen again. Approvals and plans by voice. */
+@Composable
+private fun VoiceScreen(agent: AgentController, onClose: () -> Unit, onModel: () -> Unit) {
+    val voice = agent.voice
+    var langMenu by remember { mutableStateOf(false) }
+    val phaseColor = when (voice.phase) {
+        VoicePhase.Listening -> C.VioletSoft
+        VoicePhase.Transcribing, VoicePhase.Thinking -> C.Amber
+        VoicePhase.Speaking -> C.Green
+        else -> C.Dim
+    }
+    val transition = rememberInfiniteTransition(label = "orb")
+    val breathe by transition.animateFloat(0.92f, 1.06f, infiniteRepeatable(tween(1400), RepeatMode.Reverse), label = "breathe")
+    val spin by transition.animateFloat(0f, 360f, infiniteRepeatable(tween(1600, easing = LinearEasing)), label = "spin")
+    val level by animateFloatAsState(voice.level, tween(90), label = "level")
+    Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF151320), C.Panel, Color(0xFF101012))))) {
+        Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.clip(RoundedCornerShape(10.dp)).background(Color(0xFF232329)).clickable(onClick = onModel)
+                .padding(horizontal = 9.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                ProviderLogo(agent.provider, 15); Spacer(Modifier.width(6.dp))
+                Text(agent.modelId ?: "Choose model", color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 130.dp))
+                Text(" ▾", color = C.Muted, fontSize = 10.sp)
+            }
+            Spacer(Modifier.width(6.dp))
+            Box {
+                Pill("🌐 " + (VoiceText.languages.firstOrNull { it.tag == voice.language }?.label?.substringBefore(" (") ?: voice.language) + " ▾",
+                    onClick = { langMenu = true })
+                DropdownMenu(langMenu, { langMenu = false }) {
+                    VoiceText.languages.forEach { l ->
+                        DropdownMenuItem({ Text((if (l.tag == voice.language) "✓ " else "") + l.label) }, { voice.updateLanguage(l.tag); langMenu = false })
+                    }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            HeaderIcon(ToolIcon.Close, "End voice chat", onClose)
+        }
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally) {
+            Spacer(Modifier.height(24.dp))
+            Box(Modifier.size(210.dp).clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { voice.tap() },
+                contentAlignment = Alignment.Center) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val base = size.minDimension / 2f * 0.62f
+                    val r = when (voice.phase) {
+                        VoicePhase.Listening -> base * (1f + 0.35f * level)
+                        VoicePhase.Speaking -> base * breathe * 1.04f
+                        else -> base * breathe
+                    }
+                    drawCircle(phaseColor.copy(alpha = 0.10f), radius = r * 1.45f)
+                    drawCircle(phaseColor.copy(alpha = 0.18f), radius = r * 1.2f)
+                    drawCircle(Brush.radialGradient(listOf(phaseColor.copy(alpha = 0.95f), C.Violet.copy(alpha = 0.85f), Color(0xFF312E81)),
+                        center = center, radius = r), radius = r)
+                    if (voice.phase == VoicePhase.Thinking || voice.phase == VoicePhase.Transcribing)
+                        drawArc(Color.White.copy(alpha = 0.8f), spin, 70f, false, topLeft = center - Offset(r * 1.2f, r * 1.2f),
+                            size = Size(r * 2.4f, r * 2.4f), style = Stroke(width = 4f, cap = StrokeCap.Round))
+                }
+                Text(when (voice.phase) {
+                    VoicePhase.Listening -> "🎙"; VoicePhase.Speaking -> "🔊"; VoicePhase.Thinking, VoicePhase.Transcribing -> "✦"; else -> "▶"
+                }, fontSize = 34.sp, color = Color.White)
+            }
+            Spacer(Modifier.height(14.dp))
+            Text(when (voice.phase) {
+                VoicePhase.Listening -> "Listening…"
+                VoicePhase.Transcribing -> "Understanding…"
+                VoicePhase.Thinking -> agent.messages.lastOrNull { it.role == Role.Tool }?.summary?.takeIf { agent.running }?.let { "Working · $it" } ?: "Thinking…"
+                VoicePhase.Speaking -> "Speaking · tap to interrupt"
+                else -> "Paused · tap the circle to talk"
+            }, color = phaseColor, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Spacer(Modifier.height(16.dp))
+            val said = voice.partial.ifBlank { voice.heard }
+            if (said.isNotBlank()) Text("“$said”", color = if (voice.partial.isNotBlank()) Color.White else C.Muted, fontSize = 16.sp,
+                lineHeight = 22.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            if (agent.running && agent.streaming.isNotBlank()) Text(agent.streaming.takeLast(280), color = C.Text, fontSize = 13.sp, lineHeight = 19.sp,
+                modifier = Modifier.padding(top = 14.dp))
+            else if (voice.reply.isNotBlank()) Column(Modifier.padding(top = 14.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                .background(Color(0xFF1F1F25)).padding(12.dp)) { MarkdownBlock(voice.reply) }
+            voice.error?.let { Text(it, color = C.Amber, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center) }
+            voice.missingVoice?.let { name ->
+                val context = androidx.compose.ui.platform.LocalContext.current
+                Text("No $name voice installed on this phone — tap to install it in Android settings.", color = C.Amber, fontSize = 11.5.sp,
+                    modifier = Modifier.padding(top = 10.dp).clickable {
+                        runCatching { context.startActivity(Intent(android.speech.tts.TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    })
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+        agent.pending?.let { ApprovalCard(it, agent) }
+        if (agent.planAwaitingApproval && !agent.running) PlanApproval(agent, onEdit = { voice.tap() })
+        Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween) {
+            VoiceButton(if (voice.speakReplies) "🔊" else "🔇", if (voice.speakReplies) "Voice on" else "Muted") { voice.updateSpeakReplies(!voice.speakReplies) }
+            if (agent.running) VoiceButton("■", "Stop task", Color(0xFF7F1D1D)) { voice.stopTask() }
+            else if (voice.phase == VoicePhase.Paused || voice.phase == VoicePhase.Off) VoiceButton("🎙", "Talk", C.Violet) { voice.tap() }
+            else VoiceButton("⏸", "Pause") { voice.pause() }
+            VoiceButton("⌨", "Type") { onClose() }
+            VoiceButton("✕", "End", Color(0xFF3F1D1D)) { onClose() }
+        }
+    }
+}
+
+@Composable
+private fun VoiceButton(icon: String, label: String, bg: Color = Color(0xFF27272A), onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.size(52.dp).clip(CircleShape).background(bg).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+            Text(icon, fontSize = 19.sp, color = Color.White)
+        }
+        Text(label, color = C.Muted, fontSize = 10.5.sp, modifier = Modifier.padding(top = 4.dp))
     }
 }
 
@@ -693,14 +880,15 @@ private fun inline(text: String): AnnotatedString = buildAnnotatedString {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ModelPickerSheet(agent: AgentController, onDismiss: () -> Unit, onAddProvider: () -> Unit, onPick: ((ProviderSpec, String) -> Unit)? = null) {
+fun ModelPickerSheet(agent: AgentController, onDismiss: () -> Unit, onAddProvider: () -> Unit, onPick: ((ProviderSpec, String) -> Unit)? = null,
+    initialFilter: String = "All") {
     @Suppress("UNUSED_VARIABLE") val rev = agent.revision
     var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf("All") }
+    var filter by remember { mutableStateOf(initialFilter) }
     val configured = agent.configured()
     val total = configured.sumOf { agent.models(it).size }
     fun matches(spec: ProviderSpec, m: ModelInfo) = (query.isBlank() || m.id.contains(query.trim(), true) || spec.name.contains(query.trim(), true)) &&
-        when (filter) { "Vision" -> ModelCaps.vision(m.id); "Tools" -> spec.supportsTools; "Free" -> m.free || spec.tier == Tier.Free; else -> true }
+        when (filter) { "Vision" -> agent.canSee(spec.id, m.id); "Tools" -> spec.supportsTools; "Free" -> m.free || spec.tier == Tier.Free; else -> true }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = C.Panel, dragHandle = { BottomSheetDefaults.DragHandle(color = Color(0xFF52525B)) }) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.85f)) {
             Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -724,6 +912,8 @@ fun ModelPickerSheet(agent: AgentController, onDismiss: () -> Unit, onAddProvide
                     Pill(when (f) { "Vision" -> "👁 Vision"; "Tools" -> "🔧 Tools"; else -> f }, active = filter == f, onClick = { filter = f })
                 }
             }
+            Text("👁 = can see images. Long-press a model to change it.", color = C.Dim, fontSize = 10.5.sp,
+                modifier = Modifier.padding(start = 16.dp, top = 6.dp))
             if (configured.isEmpty()) Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("No provider yet. Add an API key to see its models.", color = C.Muted, fontSize = 13.sp)
                 Button(onClick = onAddProvider, colors = ButtonDefaults.buttonColors(containerColor = C.Violet)) { Text("Add provider") }
@@ -759,13 +949,22 @@ private fun GroupHeader(title: String, spec: ProviderSpec?, trailing: String?) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ModelRow(agent: AgentController, spec: ProviderSpec, m: ModelInfo, onDismiss: () -> Unit, onPick: ((ProviderSpec, String) -> Unit)?) {
     val selected = onPick == null && agent.providerId == spec.id && agent.modelId == m.id
+    var menu by remember { mutableStateOf(false) }
+    val override = agent.visionOverride(spec.id, m.id)
+    Box {
+    DropdownMenu(menu, { menu = false }) {
+        DropdownMenuItem({ Text((if (override == true) "✓ " else "") + "👁 Can see images") }, { agent.setVisionOverride(spec.id, m.id, true); menu = false })
+        DropdownMenuItem({ Text((if (override == false) "✓ " else "") + "Text only") }, { agent.setVisionOverride(spec.id, m.id, false); menu = false })
+        DropdownMenuItem({ Text((if (override == null) "✓ " else "") + "Automatic") }, { agent.setVisionOverride(spec.id, m.id, null); menu = false })
+    }
     Row(Modifier.padding(horizontal = 6.dp).fillMaxWidth().clip(RoundedCornerShape(10.dp))
         .background(if (selected) Color(0xFF232335) else Color.Transparent)
         .border(if (selected) 1.dp else 0.dp, if (selected) Color(0xFF3B3B5C) else Color.Transparent, RoundedCornerShape(10.dp))
-        .clickable { if (onPick != null) onPick(spec, m.id) else agent.select(spec, m.id); onDismiss() }
+        .combinedClickable(onLongClick = { menu = true }) { if (onPick != null) onPick(spec, m.id) else agent.select(spec, m.id); onDismiss() }
         .padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         ProviderLogo(spec, 26)
         Spacer(Modifier.width(10.dp))
@@ -776,10 +975,11 @@ private fun ModelRow(agent: AgentController, spec: ProviderSpec, m: ModelInfo, o
         }
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (m.free) Cap("free", C.Green, Color(0xFF14321F))
-            if (ModelCaps.vision(m.id)) Cap("👁", C.Muted, C.Raised)
+            if (agent.canSee(spec.id, m.id)) Cap("👁", if (override == true) C.VioletSoft else C.Muted, C.Raised)
             if (spec.supportsTools) Cap("🔧", C.Muted, C.Raised)
         }
         if (selected) { Spacer(Modifier.width(6.dp)); Box(Modifier.size(18.dp).background(C.Violet, CircleShape), contentAlignment = Alignment.Center) { Text("✓", color = Color.White, fontSize = 10.sp) } }
+    }
     }
 }
 
@@ -805,8 +1005,10 @@ private fun AttachSheet(agent: AgentController, onDismiss: () -> Unit) {
                 AttachTile("🌐", "Browser\nscreenshot", Color(0xFF14321F), Modifier.weight(1f)) { agent.attachBrowserScreenshot(); onDismiss() }
                 AttachTile("📄", "File", Color(0xFF3A2F12), Modifier.weight(1f)) { file.launch("*/*") }
             }
-            if (!agent.visionModel) Text("The selected model may not see images. Pick a 👁 model to work from screenshots.", color = C.Amber, fontSize = 11.5.sp,
+            if (agent.visionModel) Text("👁 ${agent.modelId} can see images: photos, screenshots and designs.", color = C.Green, fontSize = 11.5.sp,
                 modifier = Modifier.padding(top = 12.dp))
+            else Text("${agent.modelId ?: "The selected model"} can't see images. Pick a 👁 model to work from photos and screenshots " +
+                "(or long-press a model in the list to mark it).", color = C.Amber, fontSize = 11.5.sp, modifier = Modifier.padding(top = 12.dp))
         }
     }
 }
@@ -978,7 +1180,7 @@ fun AgentOnboarding(agent: AgentController, onClose: () -> Unit) {
                                 ProviderLogo(p, 24); Spacer(Modifier.width(10.dp))
                                 Text(m.id, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 if (m.free) Cap("free", C.Green, Color(0xFF14321F))
-                                if (ModelCaps.vision(m.id)) { Spacer(Modifier.width(4.dp)); Cap("👁", C.Muted, C.Raised) }
+                                if (agent.canSee(p.id, m.id)) { Spacer(Modifier.width(4.dp)); Cap("👁", C.Muted, C.Raised) }
                                 if (sel) { Spacer(Modifier.width(6.dp)); Text("✓", color = C.VioletSoft) }
                             }
                         }
@@ -1138,6 +1340,7 @@ fun AgentSettingsScreen(agent: AgentController, onBack: () -> Unit) {
             if (instructions != agent.instructions) Button(onClick = { agent.updateInstructions(instructions) }, modifier = Modifier.padding(top = 6.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = C.Violet)) { Text("Save") }
             Text("A project can also have AGENTS.md or CODRIOD.md; the agent follows it as project rules.", color = C.Dim, fontSize = 11.sp, modifier = Modifier.padding(vertical = 8.dp))
+            VoiceSettings(agent)
             SectionLabel("PRIVACY")
             Text("API keys are yours, stored in this app's private storage on this phone (not in backups) and sent only to their provider. " +
                 "Git tokens are never given to the agent.", color = C.Dim, fontSize = 11.sp, modifier = Modifier.padding(bottom = 24.dp))
@@ -1146,4 +1349,51 @@ fun AgentSettingsScreen(agent: AgentController, onBack: () -> Unit) {
     if (defaultPicker) ModelPickerSheet(agent, onDismiss = { defaultPicker = false }, onAddProvider = { defaultPicker = false; page = "providers" })
     if (fastPicker) ModelPickerSheet(agent, onDismiss = { fastPicker = false }, onAddProvider = { fastPicker = false; page = "providers" },
         onPick = { spec, model -> agent.updateFastModel(ModelRef(spec.id, model)) })
+}
+
+@Composable
+private fun VoiceSettings(agent: AgentController) {
+    val voice = agent.voice
+    var langMenu by remember { mutableStateOf(false) }
+    var earMenu by remember { mutableStateOf(false) }
+    var mouthMenu by remember { mutableStateOf(false) }
+    var voiceMenu by remember { mutableStateOf(false) }
+    SectionLabel("VOICE")
+    Box {
+        SettingLink("Language", "What you speak; replies are read in their own language on Auto",
+            VoiceText.languages.firstOrNull { it.tag == voice.language }?.label ?: voice.language) { langMenu = true }
+        DropdownMenu(langMenu, { langMenu = false }) {
+            VoiceText.languages.forEach { l -> DropdownMenuItem({ Text((if (l.tag == voice.language) "✓ " else "") + l.label) }, { voice.updateLanguage(l.tag); langMenu = false }) }
+        }
+    }
+    val ears = voice.listenEngines()
+    Box {
+        SettingLink("Speech recognition", "Whisper understands Urdu and mixed speech best", ears.firstOrNull { it.first == voice.listenEngine }?.second ?: "Phone") { earMenu = true }
+        DropdownMenu(earMenu, { earMenu = false }) {
+            ears.forEach { (id, label) -> DropdownMenuItem({ Text((if (id == voice.listenEngine) "✓ " else "") + label) }, { voice.updateListenEngine(id); earMenu = false }) }
+        }
+    }
+    if (ears.size == 1) Text("Add a Groq (free) or OpenAI key in Providers to use Whisper.", color = C.Dim, fontSize = 11.sp)
+    val mouths = voice.speakEngines()
+    Box {
+        SettingLink("Reply voice", "How answers are spoken", mouths.firstOrNull { it.first == voice.speakEngine }?.second ?: "Phone voice") { mouthMenu = true }
+        DropdownMenu(mouthMenu, { mouthMenu = false }) {
+            mouths.forEach { (id, label) -> DropdownMenuItem({ Text((if (id == voice.speakEngine) "✓ " else "") + label) }, { voice.updateSpeakEngine(id); mouthMenu = false }) }
+        }
+    }
+    if (voice.speakEngine == "openai") Box {
+        SettingLink("OpenAI voice", "Natural voice, many languages", voice.cloudVoice) { voiceMenu = true }
+        DropdownMenu(voiceMenu, { voiceMenu = false }) {
+            voice.cloudVoices.forEach { v -> DropdownMenuItem({ Text((if (v == voice.cloudVoice) "✓ " else "") + v) }, { voice.updateCloudVoice(v); voiceMenu = false }) }
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+        Text("Speed ${String.format("%.1f", voice.rate)}×", color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text("▶ Test", color = C.VioletSoft, fontSize = 12.sp, modifier = Modifier.clickable { voice.read("Hello! I'm Codriod Agent. السلام علیکم، میں آپ کی کیا مدد کروں؟") }.padding(6.dp))
+    }
+    Slider(voice.rate, { voice.updateRate(it) }, valueRange = 0.5f..2f, colors = SliderDefaults.colors(thumbColor = C.Violet, activeTrackColor = C.Violet))
+    SettingToggle("Hands-free", "After a reply, listen again automatically", voice.autoListen) { voice.updateAutoListen(it) }
+    SettingToggle("Read replies in text chat", "Speak every answer even when you type", voice.readReplies) { voice.updateReadReplies(it) }
+    Text("In voice chat, say “yes”, “no” or “always” (ہاں / نہیں / ہمیشہ) to approve steps, “build” or “autopilot” for a plan, and “stop” to cancel.",
+        color = C.Dim, fontSize = 11.sp, modifier = Modifier.padding(vertical = 4.dp))
 }

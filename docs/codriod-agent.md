@@ -39,11 +39,49 @@ Codriod Agent is the built-in coding agent. You can open it in two ways:
 
 - **＋** attaches a photo from the camera or gallery, a screenshot of Codriod's
   browser, or a file. Images are scaled down to 1600 px.
-- Images are sent only to models that can see them (👁 in the model list).
-- With **@ Context** you can attach open files, a folder, the browser page with its
-  console, the terminal output, or Git changes.
+- When the selected model can see images, a **🖼** button appears in the composer,
+  and the model chip shows 👁.
+- Codriod decides which models can see images in this order:
+  1. Your own choice. Long-press a model in the list and pick *Can see images*,
+     *Text only* or *Automatic*.
+  2. The provider's model list, where it says so. OpenRouter, Hugging Face, GitHub
+     Models, Mistral and others do.
+  3. A guess from the model name. Examples: GPT-4o/4.1/5, Claude, Gemini, Llama 4,
+     Qwen-VL, Pixtral, Grok 4, Gemma 3.
+- If you attach an image to a model that cannot see it, a bar offers to switch
+  to a 👁 model.
+- With **@** (Context) you can attach open files, a folder, the browser page with
+  its console, the terminal output, or Git changes.
 - *Send the open file* adds the editor's file to every request.
 - `AGENTS.md` or `CODRIOD.md` in the project is followed as project rules.
+
+## Voice
+
+| Feature | How it works |
+| --- | --- |
+| Dictation | 🎤 in the composer types what you say, live. Tap ■ to finish. |
+| Voice chat | When the message box is empty, the round purple button opens voice chat. You speak, the agent works, and the answer is read aloud. With *Hands-free* on, it listens again after each answer. |
+| During voice chat | Tap the circle to interrupt the voice or to finish speaking. Use ⏸ to pause, ■ to stop the task, and 🔇 to mute the voice. |
+| Approvals by voice | When a step needs approval, the agent asks out loud. Say *yes*, *no* or *always* (ہاں / نہیں / ہمیشہ). For a plan, say *build* or *autopilot*, or say what to change. Say *stop* (رکو) to cancel. |
+| 🔊 Read | On any answer, reads it aloud. *Read replies in text chat* speaks every answer. |
+| Spoken answers | The model is asked to answer briefly in the language you spoke. Code goes into files and is not read out. |
+
+Voice settings (**Agent settings → Voice**):
+
+- **Language:** *Auto* uses the phone's language for listening. Spoken replies use
+  the language of the text: Urdu, Arabic, Hindi and others are detected
+  automatically.
+- **Speech recognition:**
+  - The phone's recognizer.
+  - *Whisper on Groq*, with your free Groq key.
+  - *OpenAI transcribe*, with your OpenAI key.
+
+  Whisper is best for Urdu and for mixed Urdu and English.
+- **Reply voice:** the phone's text-to-speech, or OpenAI voices with your key.
+  If the phone has no voice for a language, Codriod offers to install one.
+- **Speed**, **Hands-free** and **Read replies in text chat**.
+
+The microphone permission is asked only when you first tap a mic button.
 
 ## Models
 

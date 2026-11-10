@@ -38,7 +38,8 @@ data class ToolSpec(val name: String, val description: String, val parameters: J
 data class LlmReply(val text: String, val toolCalls: List<ToolCall>,
     val inputTokens: Int = 0, val outputTokens: Int = 0, val stopReason: String? = null)
 
-data class ModelInfo(val id: String, val free: Boolean = false, val contextLength: Int = 0)
+/** [vision] comes from the provider's model list when it says which inputs a model takes; null means unknown. */
+data class ModelInfo(val id: String, val free: Boolean = false, val contextLength: Int = 0, val vision: Boolean? = null)
 
 class LlmException(message: String) : IOException(message)
 
@@ -54,13 +55,40 @@ object FileImages : ImageSource {
     }
 }
 
-/** Best-effort guess of what a model can do, from its id. */
+/** Best-effort guess of what a model can do, from its id, when the provider does not say. */
 object ModelCaps {
-    private val vision = listOf("gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4", "claude-3", "claude-sonnet", "claude-opus", "claude-haiku-4",
-        "gemini", "gemma-3", "llava", "vision", "-vl", "pixtral", "llama-4", "grok-4", "grok-2-vision", "qwen2.5-vl", "qwen3-vl",
-        "minicpm-v", "moondream", "mistral-medium", "mistral-small-3", "phi-4-multimodal", "kimi-vl", "glm-4.5v", "nova")
+    private val vision = listOf("gpt-4o", "gpt-4.1", "gpt-4-turbo", "gpt-4-vision", "chatgpt-4o", "gpt-5", "o1", "o3", "o4",
+        "claude-3", "claude-sonnet", "claude-opus", "claude-haiku-4", "claude-4", "gemini", "gemma-3", "llava", "bakllava",
+        "vision", "-vl", "_vl", "vl-", "pixtral", "llama-4", "llama4", "grok-4", "grok-2-vision", "qwen-vl", "qvq",
+        "minicpm-v", "moondream", "mistral-medium", "mistral-small-3", "magistral-medium-2509", "magistral-small-2509",
+        "phi-4-multimodal", "phi-3.5-vision", "kimi-vl", "kimi-k2.5", "glm-4.5v", "glm-4.6v", "glm-4v", "nova-lite", "nova-pro",
+        "nova-premier", "internvl", "molmo", "aya-vision", "granite-vision", "cogvlm", "omni", "multimodal", "fuyu", "idefics",
+        "smolvlm", "paligemma", "mllama")
+    private val notVision = listOf("o1-mini", "o1-preview", "o3-mini", "gpt-4o-audio", "gpt-4o-realtime", "gpt-4o-search",
+        "gpt-oss", "embed", "whisper", "tts", "gemini-embedding", "gemma-3-1b", "gemma-3n-e2b-it-text", "-text-only")
 
-    fun vision(id: String): Boolean = vision.any { id.contains(it, ignoreCase = true) }
+    fun vision(id: String): Boolean = notVision.none { id.contains(it, ignoreCase = true) } && vision.any { id.contains(it, ignoreCase = true) }
+
+    /** Reads "can take images" from a model-list entry (OpenRouter, Hugging Face, GitHub Models, Mistral, Together, LM Studio …). */
+    fun visionFromMetadata(item: JSONObject): Boolean? {
+        fun has(array: JSONArray?) = array?.let { a -> (0 until a.length()).map { a.optString(it).lowercase() } }
+        val lists = listOfNotNull(
+            has(item.optJSONObject("architecture")?.optJSONArray("input_modalities")),
+            has(item.optJSONArray("input_modalities")),
+            has(item.optJSONArray("supported_input_modalities")),
+            has(item.optJSONObject("modalities")?.optJSONArray("input")))
+        if (lists.isNotEmpty()) return lists.any { list -> list.any { it == "image" || it == "images" || it == "vision" } }
+        item.optJSONObject("architecture")?.optString("modality")?.takeIf { it.isNotBlank() }?.let {
+            return it.substringBefore("->").contains("image", true)
+        }
+        item.optJSONObject("capabilities")?.let { caps ->
+            if (caps.has("vision")) return caps.optBoolean("vision")
+        }
+        item.optJSONArray("capabilities")?.let { a -> return (0 until a.length()).any { a.optString(it).equals("vision", true) } }
+        if (item.has("vision")) return item.optBoolean("vision")
+        if (item.optString("type") == "vlm") return true
+        return null
+    }
 }
 
 /** Pure request/response mapping, kept separate from networking so it can be unit tested. */
@@ -344,7 +372,8 @@ object ModelListParser {
             val pricing = item.optJSONObject("pricing")
             val free = id.endsWith(":free") || (pricing != null &&
                 pricing.optString("prompt") in listOf("0", "0.0") && pricing.optString("completion") in listOf("0", "0.0"))
-            models += ModelInfo(id, free, item.optInt("context_length", item.optInt("context_window", item.optInt("inputTokenLimit", 0))))
+            models += ModelInfo(id, free, item.optInt("context_length", item.optInt("context_window", item.optInt("inputTokenLimit", 0))),
+                ModelCaps.visionFromMetadata(item))
         }
         return models.distinctBy { it.id }
             .filter { model -> nonChat.none { model.id.contains(it, ignoreCase = true) } || model.id.contains("vision", true) }
@@ -407,6 +436,30 @@ class LlmClient(private val connectTimeoutMs: Int = 20_000, private val readTime
         }
     }
 
+    /** Speech to text with an OpenAI-compatible `/audio/transcriptions` endpoint (OpenAI, Groq). */
+    suspend fun transcribe(spec: ProviderSpec, key: String, baseUrl: String, model: String, audio: File, language: String?,
+        prompt: String? = null): String {
+        val form = Multipart()
+        form.field("model", model)
+        form.field("response_format", "json")
+        if (!language.isNullOrBlank()) form.field("language", language)
+        if (!prompt.isNullOrBlank()) form.field("prompt", prompt)
+        form.file("file", audio.name, "audio/mp4", audio.readBytes())
+        val headers = headers(spec, key).toMutableMap()
+        headers["Content-Type"] = "multipart/form-data; boundary=${form.boundary}"
+        val text = sendBytes("POST", baseUrl.trimEnd('/') + "/audio/transcriptions", headers, form.finish()).toString(Charsets.UTF_8)
+        return runCatching { JSONObject(text).optString("text") }.getOrDefault(text).trim()
+    }
+
+    /** Text to speech with OpenAI's `/audio/speech`; returns MP3 bytes. */
+    suspend fun speech(spec: ProviderSpec, key: String, baseUrl: String, model: String, voice: String, text: String, speed: Float): ByteArray {
+        val body = JSONObject().put("model", model).put("voice", voice).put("input", text)
+            .put("response_format", "mp3").put("speed", speed.toDouble().coerceIn(0.25, 4.0))
+        val headers = headers(spec, key).toMutableMap()
+        headers["Accept"] = "audio/mpeg"
+        return sendBytes("POST", baseUrl.trimEnd('/') + "/audio/speech", headers, body.toString().toByteArray(Charsets.UTF_8))
+    }
+
     private fun headers(spec: ProviderSpec, key: String, stream: Boolean = false): Map<String, String> {
         val result = linkedMapOf("Content-Type" to "application/json", "Accept" to if (stream) "text/event-stream" else "application/json")
         when (spec.style) {
@@ -457,7 +510,10 @@ class LlmClient(private val connectTimeoutMs: Int = 20_000, private val readTime
         }
     }
 
-    private suspend fun send(method: String, url: String, headers: Map<String, String>, body: String?): String {
+    private suspend fun send(method: String, url: String, headers: Map<String, String>, body: String?): String =
+        sendBytes(method, url, headers, body?.toByteArray(Charsets.UTF_8)).toString(Charsets.UTF_8)
+
+    private suspend fun sendBytes(method: String, url: String, headers: Map<String, String>, body: ByteArray?): ByteArray {
         require(url.startsWith("https://") || url.startsWith("http://")) { "Set a valid server URL first" }
         val connection = URL(url).openConnection() as HttpURLConnection
         return coroutineScope {
@@ -468,21 +524,36 @@ class LlmClient(private val connectTimeoutMs: Int = 20_000, private val readTime
                 headers.forEach { (name, value) -> connection.setRequestProperty(name, value) }
                 if (body != null) {
                     connection.doOutput = true
-                    connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                    connection.outputStream.use { it.write(body) }
                 }
                 val code = connection.responseCode
                 val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-                val text = stream?.use { it.readBytes().toString(Charsets.UTF_8) }.orEmpty()
+                val bytes = stream?.use { it.readBytes() } ?: ByteArray(0)
                 if (code !in 200..299) {
+                    val text = bytes.toString(Charsets.UTF_8)
                     val detail = runCatching { errorMessage(JSONObject(text)) }.getOrNull()
                         ?: text.take(300).ifBlank { connection.responseMessage ?: "" }
                     throw LlmException("HTTP $code: $detail")
                 }
-                text
+                bytes
             }
             try { request.await() }
             catch (error: CancellationException) { connection.disconnect(); throw error }
             finally { connection.disconnect() }
         }
     }
+}
+
+/** A small multipart/form-data writer for file uploads. */
+class Multipart(val boundary: String = "----codriod" + System.nanoTime().toString(16)) {
+    private val out = java.io.ByteArrayOutputStream()
+    private fun line(text: String = "") { out.write((text + "\r\n").toByteArray(Charsets.UTF_8)) }
+    fun field(name: String, value: String) {
+        line("--$boundary"); line("Content-Disposition: form-data; name=\"$name\""); line(); line(value)
+    }
+    fun file(name: String, fileName: String, type: String, bytes: ByteArray) {
+        line("--$boundary"); line("Content-Disposition: form-data; name=\"$name\"; filename=\"$fileName\""); line("Content-Type: $type"); line()
+        out.write(bytes); line()
+    }
+    fun finish(): ByteArray { line("--$boundary--"); return out.toByteArray() }
 }

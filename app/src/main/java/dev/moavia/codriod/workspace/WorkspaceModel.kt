@@ -901,6 +901,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         agent.stop()
+        agent.releaseVoice()
         terminal?.close()
         super.onCleared()
     }
