@@ -198,3 +198,31 @@ class GitAuthTest {
         assertTrue(rejected.message!!.contains("Pull first"))
     }
 }
+
+class GitCloneOptionsTest {
+    @get:org.junit.Rule val temp = TemporaryFolder()
+
+    @Test fun cloneChoosesBranchAndReportsProgress() {
+        val remote = GitRemoteService(SshIdentityStore(temp.newFolder("ids"), PlainVault), CodriodHostKeys(File(temp.root, "kh")), 5)
+        val bare = temp.newFolder("origin.git")
+        Git.init().setBare(true).setDirectory(bare).setInitialBranch("main").call().close()
+        val seed = temp.newFolder("seed")
+        Git.init().setDirectory(seed).setInitialBranch("main").call().use { git ->
+            File(seed, "a.txt").writeText("main\n"); git.add().addFilepattern(".").call()
+            git.commit().setSign(false).setMessage("m").setAuthor("A", "a@x.io").setCommitter("A", "a@x.io").call()
+            git.checkout().setCreateBranch(true).setName("dev").call()
+            File(seed, "a.txt").writeText("dev\n"); git.add().addFilepattern(".").call()
+            git.commit().setSign(false).setMessage("d").setAuthor("A", "a@x.io").setCommitter("A", "a@x.io").call()
+            git.remoteAdd().setName("origin").setUri(org.eclipse.jgit.transport.URIish(bare.toURI().toURL())).call()
+            git.push().setRemote("origin").add("main").add("dev").call()
+        }
+        val url = bare.toURI().toString().replace("file:/", "file:///")
+        val seen = mutableListOf<Int>()
+        val target = temp.newFolder("clone")
+        remote.clone(url, target, allowLocal = true, branch = "dev", progress = { seen += it })
+        assertEquals("dev\n", File(target, "a.txt").readText())
+        assertEquals("dev", Git.open(target).use { it.repository.branch })
+        assertEquals(100, seen.last())
+        assertEquals(seen.sorted(), seen)
+    }
+}

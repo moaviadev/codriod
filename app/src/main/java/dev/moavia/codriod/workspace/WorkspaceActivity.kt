@@ -58,6 +58,19 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
             model.openFolderUri(uri)
         }
     }
+    var pendingUpload by remember { mutableStateOf<android.webkit.ValueCallback<Array<Uri>>?>(null) }
+    val uploadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris: List<Uri> ->
+        pendingUpload?.onReceiveValue(uris.toTypedArray())
+        pendingUpload = null
+    }
+    DisposableEffect(Unit) {
+        model.browser.fileChooser = { callback ->
+            pendingUpload?.onReceiveValue(null)
+            pendingUpload = callback
+            runCatching { uploadLauncher.launch("*/*") }.onFailure { callback.onReceiveValue(null); pendingUpload = null }
+        }
+        onDispose { model.browser.fileChooser = null; model.browser.releaseViews() }
+    }
     var createDialog by remember { mutableStateOf(false) }
     var newEntry by remember { mutableStateOf<String?>(null) }
     var renameEntry by remember { mutableStateOf<ProjectEntry?>(null) }
@@ -73,7 +86,15 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
             model.agentOpen -> model.agentOpen = false
             model.addonsOpen -> model.addonsOpen = false
             model.gitOpen -> model.closeGit()
-            model.previewOpen -> model.previewOpen = false
+            model.previewOpen -> {
+                val tab = model.browser.active
+                when {
+                    model.browser.fullscreen -> model.browser.fullscreen = false
+                    model.browser.devOpen -> model.browser.devOpen = false
+                    tab != null && tab.canGoBack -> model.browser.back(tab)
+                    else -> model.previewOpen = false
+                }
+            }
             model.terminalOpen -> model.terminalOpen = false
             else -> model.goHome()
         }
@@ -81,7 +102,7 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
     Scaffold(modifier = modifier, containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
-            if (model.project != null) WorkspaceNav(model,
+            if (model.project != null && !(model.previewOpen && model.browser.fullscreen)) WorkspaceNav(model,
                 onFiles = { model.closeGit(); model.fileSheet = true },
                 onSearch = { model.closeGit(); model.searchSheet = true },
                 onGit = model::showGit,
@@ -91,6 +112,8 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
     ) { insets ->
         Box(Modifier.fillMaxSize().padding(insets)) {
             when {
+                model.agentOpen -> dev.moavia.codriod.agent.AgentScreen(model.agent, model.project?.name,
+                    onBack = { model.agentOpen = false })
                 model.githubOpen -> GitHubScreen(model, onBack = { model.githubOpen = false })
                 model.project == null -> WorkspaceHome(
                     model = model,
@@ -99,8 +122,6 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
                     onClone = model::showGitHub,
                     onOpenTerminal = onOpenOriginalTerminal
                 )
-                model.agentOpen -> dev.moavia.codriod.agent.AgentScreen(model.agent, model.project?.name,
-                    onBack = { model.agentOpen = false })
                 model.addonsOpen -> dev.moavia.codriod.agent.AddonsScreen(model.agent,
                     onBack = { model.addonsOpen = false },
                     onOpenAgent = { model.agentOpen = true },
@@ -155,10 +176,10 @@ fun WorkspaceNav(model: WorkspaceModel, onFiles: () -> Unit, onSearch: () -> Uni
         Row(Modifier.fillMaxWidth().height(52.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
             listOf(
                 Triple("Files", ToolIcon.Folder, onFiles), Triple("Search", ToolIcon.Search, onSearch),
-                Triple("Git", ToolIcon.Git, onGit), Triple("Preview", ToolIcon.Preview, onPreview),
+                Triple("Git", ToolIcon.Git, onGit), Triple("Browser", ToolIcon.Globe, onPreview),
                 Triple("Add-ons", ToolIcon.Plus, onComingSoon)
             ).forEach { (label, icon, action) ->
-                val active = (label == "Preview" && model.previewOpen) ||
+                val active = (label == "Browser" && model.previewOpen) ||
                     (label == "Git" && model.gitOpen) ||
                     (label == "Files" && model.fileSheet) || (label == "Search" && model.searchSheet) ||
                     (label == "Add-ons" && (model.addonsOpen || model.agentOpen))

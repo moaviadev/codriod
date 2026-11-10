@@ -179,6 +179,24 @@ ls -la
     }
 
     @Synchronized
+    fun renameProject(project: Project, name: String): Project {
+        val title = name.trim()
+        require(title.isNotEmpty() && title.length <= 64 && title.none { it.isISOControl() }) {
+            "Use a project name between 1 and 64 characters"
+        }
+        return project.copy(name = title).also(::saveMetadata)
+    }
+
+    /** Deletes a project. For an opened device folder only Codriod's link is removed; the folder itself stays. */
+    @Synchronized
+    fun deleteProject(project: Project) {
+        require(project.id.matches(Regex("[a-zA-Z0-9-]+"))) { "Invalid project ID" }
+        val folder = File(directory, project.id).canonicalFile
+        require(folder.parentFile == directory.canonicalFile && folder.isDirectory) { "Project not found" }
+        check(folder.deleteRecursively()) { "Could not delete the project" }
+    }
+
+    @Synchronized
     fun touch(project: Project) = project.copy(modified = System.currentTimeMillis()).also(::saveMetadata)
 
     private fun saveMetadata(project: Project) {

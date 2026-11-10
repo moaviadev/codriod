@@ -72,6 +72,10 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     val gitAccount = GitAccountController(application)
     var gitRemote by mutableStateOf<String?>(null)
         private set
+    /** The in-app browser (Chrome-style, with DevTools). Serves the open project at localhost:3000. */
+    val browser = BrowserController(application,
+        files = { project?.let { PreviewFiles(store, it.id) } },
+        openInEditor = { path, line -> previewOpen = false; openFile(path, line) })
     var addonsOpen by mutableStateOf(false)
     var agentOpen by mutableStateOf(false)
 
@@ -89,6 +93,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     init {
         task {
             projects = withContext(Dispatchers.IO) { store.projects() }
+            refreshContinue()
             val last = prefs.getString("last_project", null)
             projects.firstOrNull { it.id == last }?.let { loadProject(it) }
         }
@@ -103,6 +108,41 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
             catch (error: Exception) { message = error.message ?: "Operation failed" }
             finally { busy = false }
         }
+    }
+
+    fun updateTheme(mode: String) {
+        themeMode = mode
+        prefs.edit().putString("theme", themeMode).apply()
+    }
+
+    /** The "Continue" card on Home: the last project, its open file and Git state. */
+    data class ContinueInfo(val project: Project, val file: String?, val branch: String?, val changes: Int)
+
+    var continueInfo by mutableStateOf<ContinueInfo?>(null)
+        private set
+
+    fun refreshContinue() {
+        val last = projects.maxByOrNull { it.modified } ?: run { continueInfo = null; return }
+        viewModelScope.launch {
+            val git = withContext(Dispatchers.IO) { runCatching { gitService.snapshot(store.root(last.id)) }.getOrNull() }
+            continueInfo = ContinueInfo(last, prefs.getString("active_" + last.id, null),
+                git?.takeIf { it.initialized }?.branch, git?.changedCount ?: 0)
+        }
+    }
+
+    fun renameProject(target: Project, name: String) = task {
+        withContext(Dispatchers.IO) { store.renameProject(target, name) }
+        projects = withContext(Dispatchers.IO) { store.projects() }
+        refreshContinue()
+    }
+
+    fun deleteProject(target: Project) = task {
+        withContext(Dispatchers.IO) { store.deleteProject(target) }
+        prefs.edit().remove("tabs_" + target.id).remove("active_" + target.id).apply()
+        projects = withContext(Dispatchers.IO) { store.projects() }
+        refreshContinue()
+        message = if (target.treeUri != null) "Removed “${target.name}” from Codriod. The folder on your phone was not touched."
+            else "Deleted “${target.name}”"
     }
 
     fun cycleTheme() {
@@ -173,6 +213,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         gitDiffPath = null
         persistTabs()
         agent.bind(selected.id)
+        browser.reloadProjectTabs()
     }
 
     fun showAddons() {
@@ -198,6 +239,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         agent.bind(null)
         prefs.edit().remove("last_project").apply()
         projects = withContext(Dispatchers.IO) { store.projects() }
+        refreshContinue()
     }
 
     fun select(path: String) {
@@ -407,7 +449,10 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         val path = activePath ?: return@task
         saveAll()
         when (path.substringAfterLast('.', "").lowercase()) {
-            "html", "htm", "css", "js" -> previewOpen = true
+            "html", "htm", "css", "js" -> {
+                browser.openProject(previewEntry())
+                previewOpen = true
+            }
             "sh" -> {
                 showTerminal()
                 terminal?.execute("cd " + shellQuote(store.root(current.id).absolutePath) +
@@ -417,14 +462,14 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Opens the browser; the first time in a project with HTML, it opens the project page. */
     fun showPreview() = task {
         saveAll()
-        require(entries.any { !it.directory && it.path.endsWith(".html", true) }) {
-            "Add an HTML file to use web preview"
-        }
         gitOpen = false
         addonsOpen = false
         agentOpen = false
+        githubOpen = false
+        if (browser.tabs.isEmpty() && entries.any { !it.directory && it.path.endsWith(".html", true) }) browser.openProject(previewEntry())
         previewOpen = true
     }
 
@@ -554,16 +599,26 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         gitAccount.remote.setRemoteUrl(root, GitRemoteService.githubHttpsUrl(url) ?: url)
     }
 
-    fun cloneRepository(url: String, name: String) = task {
+    /** 0..100 while a clone runs, else null. */
+    var cloneProgress by mutableStateOf<Int?>(null)
+        private set
+
+    fun cloneRepository(url: String, name: String, branch: String? = null) = task {
         val target = GitRemoteService.githubHttpsUrl(url) ?: url
-        val created = remoteCall {
-            store.createFromClone(name) { folder -> gitAccount.remote.clone(target, folder) }
-        }
-        withContext(Dispatchers.IO) { gitService.ensureMetadataExcluded(store.root(created.id)) }
-        projects = withContext(Dispatchers.IO) { store.projects() }
-        githubOpen = false
-        loadProject(created)
-        message = "Cloned into ${created.name}"
+        cloneProgress = 0
+        try {
+            val created = remoteCall {
+                store.createFromClone(name) { folder ->
+                    gitAccount.remote.clone(target, folder, branch = branch, progress = { cloneProgress = it })
+                }
+            }
+            withContext(Dispatchers.IO) { gitService.ensureMetadataExcluded(store.root(created.id)) }
+            projects = withContext(Dispatchers.IO) { store.projects() }
+            githubOpen = false
+            selectedRepo = null
+            loadProject(created)
+            message = "Cloned into ${created.name}"
+        } finally { cloneProgress = null }
     }
 
     // ---- GitHub: the user's own access token, their repositories, clone ---------------------------
@@ -575,6 +630,48 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         private set
     var githubError by mutableStateOf<String?>(null)
         private set
+    var githubProfile by mutableStateOf<dev.moavia.codriod.git.GitHubUser?>(null)
+        private set
+    /** Clone URL (normalised) of each project already on this phone, to show "Open" instead of "Clone". */
+    var localRepos by mutableStateOf<Map<String, Project>>(emptyMap())
+        private set
+    var selectedRepo by mutableStateOf<GitHubRepo?>(null)
+    var repoBranches by mutableStateOf<List<String>>(emptyList())
+        private set
+    var repoFiles by mutableStateOf<List<dev.moavia.codriod.git.GitHubEntry>?>(null)
+        private set
+    var repoReadme by mutableStateOf<String?>(null)
+        private set
+    var repoError by mutableStateOf<String?>(null)
+        private set
+
+    private fun repoKey(url: String) = url.trim().lowercase().removeSuffix("/").removeSuffix(".git")
+
+    fun localProjectFor(repo: GitHubRepo): Project? = localRepos[repoKey(repo.cloneUrl)]
+
+    private suspend fun refreshLocalRepos() {
+        localRepos = withContext(Dispatchers.IO) {
+            projects.mapNotNull { p ->
+                runCatching { gitAccount.remote.remoteUrl(store.root(p.id)) }.getOrNull()
+                    ?.let { url -> repoKey(GitRemoteService.githubHttpsUrl(url) ?: url) to p }
+            }.toMap()
+        }
+    }
+
+    /** Opens a repository's detail page and loads its branches, files and README. */
+    fun openRepo(repo: GitHubRepo, branch: String = repo.defaultBranch) {
+        if (selectedRepo?.fullName != repo.fullName) { repoBranches = emptyList() }
+        selectedRepo = repo
+        repoFiles = null; repoReadme = null; repoError = null
+        viewModelScope.launch {
+            try {
+                if (repoBranches.isEmpty()) repoBranches = withContext(Dispatchers.IO) { gitAccount.githubBranches(repo.fullName) }
+                repoFiles = withContext(Dispatchers.IO) { gitAccount.githubFiles(repo.fullName, branch) }
+                repoReadme = withContext(Dispatchers.IO) { gitAccount.githubReadme(repo.fullName, branch) } ?: ""
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) { repoError = error.message ?: "Could not load the repository" }
+        }
+    }
 
     fun showGitHub() {
         gitOpen = false
@@ -582,7 +679,9 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         addonsOpen = false
         agentOpen = false
         githubOpen = true
-        if (gitAccount.githubToken != null && githubRepos.isEmpty()) loadGitHubRepos()
+        if (gitAccount.githubToken != null) {
+            if (githubRepos.isEmpty()) loadGitHubRepos() else viewModelScope.launch { refreshLocalRepos() }
+        }
     }
 
     fun loadGitHubRepos() {
@@ -590,7 +689,11 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             githubLoading = true
             githubError = null
-            try { githubRepos = withContext(Dispatchers.IO) { gitAccount.githubRepos() } }
+            try {
+                githubProfile = withContext(Dispatchers.IO) { gitAccount.githubProfile() }
+                githubRepos = withContext(Dispatchers.IO) { gitAccount.githubRepos() }
+                refreshLocalRepos()
+            }
             catch (error: CancellationException) { throw error }
             catch (error: Exception) { githubError = error.message ?: "Could not load repositories" }
             finally { githubLoading = false }
@@ -609,10 +712,13 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         withContext(Dispatchers.IO) { gitAccount.removeGitHubToken() }
         githubRepos = emptyList()
         githubError = null
+        githubProfile = null
+        selectedRepo = null
         message = "Disconnected. You can also delete the token at github.com/settings/tokens."
     }
 
-    fun cloneGitHubRepo(repo: GitHubRepo) = cloneRepository(repo.cloneUrl, repo.name)
+    fun cloneGitHubRepo(repo: GitHubRepo, branch: String? = null, name: String = repo.name) =
+        cloneRepository(repo.cloneUrl, name, branch?.takeIf { it != repo.defaultBranch })
 
     fun trustPendingHost() {
         gitAccount.trustPendingHost()

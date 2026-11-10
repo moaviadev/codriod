@@ -129,19 +129,54 @@ class GitRemoteService(private val identities: SshIdentityStore, private val hos
 
     // ---- network operations --------------------------------------------------------------------------
 
-    fun clone(url: String, target: File, identityId: String? = null, allowLocal: Boolean = false): RemoteResult {
+    /**
+     * Clones [url] into the empty folder [target]. [branch] picks the branch to check out (default: the
+     * remote's default branch); [progress] receives 0..100 while objects download and check out.
+     */
+    fun clone(url: String, target: File, identityId: String? = null, allowLocal: Boolean = false,
+        branch: String? = null, progress: ((Int) -> Unit)? = null): RemoteResult {
         val value = validateRemoteUrl(url, allowLocal)
         require(target.isDirectory && target.list().isNullOrEmpty()) { "Clone target must be an empty folder" }
         val identity = identityId?.let(identities::get) ?: identities.defaultIdentity()
         transport(value, identity) {
-            Git.cloneRepository().setURI(value).setDirectory(target).setCloneAllBranches(false)
-                .configure(identity, value).call().use { git ->
+            val command = Git.cloneRepository().setURI(value).setDirectory(target).setCloneAllBranches(false)
+            branch?.takeIf { it.isNotBlank() }?.let { command.setBranch("refs/heads/$it") }
+            progress?.let { command.setProgressMonitor(PercentMonitor(it)) }
+            command.configure(identity, value).call().use { git ->
                     // An empty remote has no branch yet; start on "main" like new local projects.
                     if (git.repository.resolve(Constants.HEAD) == null) git.repository.updateRef(Constants.HEAD).link("refs/heads/main")
                     identity?.let { git.repository.config.apply { setString("codriod", null, IDENTITY_KEY, it.id); save() } }
                 }
         }
+        progress?.invoke(100)
         return RemoteResult("Cloned ${displayUrl(value)}", updatedFiles = true)
+    }
+
+    /** Maps JGit's clone phases onto one 0..100 percentage. */
+    private class PercentMonitor(private val report: (Int) -> Unit) : org.eclipse.jgit.lib.ProgressMonitor {
+        private var total = 0
+        private var done = 0
+        private var range = 0..0
+        private var last = -1
+        override fun start(totalTasks: Int) = Unit
+        override fun beginTask(title: String, totalWork: Int) {
+            total = totalWork; done = 0
+            range = when {
+                title.startsWith("Receiving", true) -> 5..80
+                title.startsWith("Resolving", true) -> 80..92
+                title.startsWith("Updating", true) || title.startsWith("Checking out", true) -> 92..99
+                else -> last.coerceAtLeast(0)..last.coerceAtLeast(0)
+            }
+            emit(range.first)
+        }
+        override fun update(completed: Int) {
+            done += completed
+            if (total > 0) emit(range.first + ((range.last - range.first) * done.coerceAtMost(total) / total))
+        }
+        override fun endTask() = emit(range.last)
+        override fun isCancelled() = false
+        override fun showDuration(enabled: Boolean) = Unit
+        private fun emit(value: Int) { if (value > last) { last = value; report(value) } }
     }
 
     fun fetch(root: File): RemoteResult = open(root).use { git ->

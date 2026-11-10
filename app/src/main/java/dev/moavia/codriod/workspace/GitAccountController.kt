@@ -13,7 +13,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.moavia.codriod.git.CodriodHostKeys
 import dev.moavia.codriod.git.GitHubApi
+import dev.moavia.codriod.git.GitHubEntry
 import dev.moavia.codriod.git.GitHubRepo
+import dev.moavia.codriod.git.GitHubUser
 import dev.moavia.codriod.git.GitRemoteService
 import dev.moavia.codriod.git.GitToken
 import dev.moavia.codriod.git.GitTokenStore
@@ -125,11 +127,15 @@ class GitAccountController(context: Context) {
         return user
     }
 
+    private fun token() = tokens.secret("github.com") ?: error("Connect your GitHub account first")
+
     /** All repositories the saved token can see. Blocking network call. */
-    fun githubRepos(): List<GitHubRepo> {
-        val token = tokens.secret("github.com") ?: error("Connect your GitHub account first")
-        return github.repos(token)
-    }
+    fun githubRepos(): List<GitHubRepo> = github.repos(token())
+
+    fun githubProfile(): GitHubUser = github.profile(token())
+    fun githubBranches(fullName: String): List<String> = github.branches(token(), fullName)
+    fun githubFiles(fullName: String, ref: String): List<GitHubEntry> = github.contents(token(), fullName, ref)
+    fun githubReadme(fullName: String, ref: String): String? = github.readme(token(), fullName, ref)
 
     /** Re-checks the saved token with GitHub. Blocking network call. */
     fun verifyGitHubToken(): String {

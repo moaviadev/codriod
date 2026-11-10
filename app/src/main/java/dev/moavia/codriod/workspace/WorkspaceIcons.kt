@@ -20,7 +20,8 @@ import androidx.compose.ui.unit.dp
 enum class ToolIcon {
     Folder, File, Search, Terminal, Preview, Plus, Close, Back, Run,
     Undo, Redo, Theme, Refresh, More, Delete, Edit, Check, Chevron, Git,
-    Settings, Fullscreen, Paste, Copy, Clear, History, Keyboard, CodeBrackets
+    Settings, Fullscreen, Paste, Copy, Clear, History, Keyboard, CodeBrackets,
+    Globe, Home, Inspect, Lock, Rotate, Star, Share
 }
 
 @Composable
@@ -113,6 +114,23 @@ fun ToolGlyph(kind: ToolIcon, tint: Color = MaterialTheme.colorScheme.onSurface,
                     line(14f, 4f, 10f, 20f)
                     // Right bracket >
                     path(16f to 6f, 21f to 12f, 16f to 18f)
+                }
+                ToolIcon.Globe -> {
+                    drawCircle(tint, 9f, Offset(12f, 12f), style = stroke)
+                    line(3f, 12f, 21f, 12f)
+                    drawOval(tint, Offset(8f, 3f), Size(8f, 18f), style = stroke)
+                }
+                ToolIcon.Home -> { path(3f to 11f, 12f to 4f, 21f to 11f); path(5f to 10f, 5f to 20f, 19f to 20f, 19f to 10f) }
+                ToolIcon.Inspect -> { path(4f to 4f, 11f to 20f, 13f to 13f, 20f to 11f, 4f to 4f); line(13f, 13f, 19f, 19f) }
+                ToolIcon.Lock -> {
+                    drawRoundRect(tint, Offset(5f, 11f), Size(14f, 10f), CornerRadius(2f), style = stroke)
+                    drawArc(tint, 180f, 180f, false, Offset(8f, 4f), Size(8f, 10f), style = stroke)
+                }
+                ToolIcon.Rotate -> { drawArc(tint, 200f, 260f, false, Offset(4f, 4f), Size(16f, 16f), style = stroke); path(4f to 5f, 5f to 10f, 10f to 9f) }
+                ToolIcon.Star -> path(12f to 3f, 14.6f to 9f, 21f to 9.5f, 16f to 13.8f, 17.6f to 20f, 12f to 16.6f, 6.4f to 20f, 8f to 13.8f, 3f to 9.5f, 9.4f to 9f, 12f to 3f)
+                ToolIcon.Share -> {
+                    drawCircle(tint, 2.5f, Offset(18f, 5f), style = stroke); drawCircle(tint, 2.5f, Offset(6f, 12f), style = stroke)
+                    drawCircle(tint, 2.5f, Offset(18f, 19f), style = stroke); line(8.2f, 10.8f, 15.8f, 6.2f); line(8.2f, 13.2f, 15.8f, 17.8f)
                 }
             }
         }
