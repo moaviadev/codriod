@@ -106,7 +106,7 @@ fun WorkspaceHome(
                 }
                 TextButton(onClick = onClone, contentPadding = PaddingValues(horizontal = 0.dp)) {
                     ToolGlyph(ToolIcon.Git, MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(8.dp)); Text("Clone a Git repository")
+                    Spacer(Modifier.width(8.dp)); Text("Clone from GitHub")
                 }
             }
         } else {
@@ -161,11 +161,11 @@ fun WorkspaceHome(
                     OutlinedButton(onClick = onClone, modifier = Modifier.weight(0.8f).height(44.dp),
                         contentPadding = PaddingValues(8.dp)) {
                         ToolGlyph(ToolIcon.Git, MaterialTheme.colorScheme.primary)
-                        Spacer(Modifier.width(6.dp)); Text("Clone")
+                        Spacer(Modifier.width(6.dp)); Text("GitHub")
                     }
                 }
                 Spacer(Modifier.height(5.dp))
-                Text("Create in private storage, open a device folder or clone a Git repository.",
+                Text("Create a project, open a device folder, or clone from your GitHub.",
                     modifier = Modifier.align(Alignment.CenterHorizontally),
                     color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
             }

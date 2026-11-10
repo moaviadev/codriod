@@ -48,18 +48,19 @@ class GitAccountToolsTest {
 
         val status = agent.execute(call("git_account_status"), AgentMode.Agent).content
         assertTrue(status.contains("no Codriod OAuth app"))
-        assertTrue(status.contains("HTTPS access token: none"))
-        assertTrue(status.contains("git@github.com:octo/app.git"))
+        assertTrue(status.contains("GitHub: not connected"))
+        assertTrue(status.contains("https://github.com/octo/app.git"))
         assertFalse(status.contains("PRIVATE", ignoreCase = false))
 
         val start = agent.execute(call("github_login_start", """{"key_name":"Pixel"}"""), AgentMode.Agent)
-        assertTrue(start.content.contains("PUBLIC key"))
+        assertTrue(start.content.contains("Generate token"))
+        assertFalse(start.content.contains("ghp_"))
         assertTrue(approver.requests.single() is ApprovalRequest.Action)
         assertEquals("@octo", Regex("@\\w+").find(agent.execute(call("github_login_verify"), AgentMode.Agent).content)?.value)
         agent.execute(call("git_configure", """{"use_ssh_remote":true,"author_name":"Octo"}"""), AgentMode.Agent)
         agent.execute(call("git_sync", """{"action":"fetch"}"""), AgentMode.Agent)
         agent.execute(call("git_sync", """{"action":"push"}"""), AgentMode.Agent)
-        assertEquals(listOf("status", "start:Pixel", "verify", "configure:Octo:true", "sync:fetch", "sync:push"), bridge.calls)
+        assertEquals(listOf("status", "start:Pixel", "verify", "configure:Octo:false", "sync:fetch", "sync:push"), bridge.calls)
         assertEquals(3, approver.requests.size) // start, configure, push (fetch needs none)
     }
 

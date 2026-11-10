@@ -1,8 +1,10 @@
 package dev.moavia.codriod.workspace
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -11,174 +13,199 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.moavia.codriod.git.GitRemoteService
+import dev.moavia.codriod.git.GitHubRepo
 
+/**
+ * GitHub: the user pastes an access token they created on their own GitHub account, sees all their
+ * repositories, and clones any of them with one tap. Pull and push then work from Source Control.
+ */
 @Composable
-private fun SectionLabel(text: String) {
-    Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 2.dp, top = 6.dp, bottom = 2.dp))
-}
-
-/** Remote tab of Source Control: the person's GitHub login, the origin remote and sync actions. */
-@Composable
-fun GitRemoteTab(model: WorkspaceModel) {
-    val project = model.project ?: return
-    var remoteDraft by remember(project.id, model.gitRemote) { mutableStateOf(model.gitRemote.orEmpty()) }
-    val sshSuggestion = model.gitRemote?.let(GitRemoteService::githubSshUrl)
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        GitHubAccountSection(model)
-
-        SectionLabel("ORIGIN")
-        OutlinedTextField(remoteDraft, { remoteDraft = it.trim().take(400) }, modifier = Modifier.fillMaxWidth(),
-            singleLine = true, enabled = !model.busy, textStyle = MaterialTheme.typography.bodySmall,
-            placeholder = { Text("git@github.com:you/repo.git") })
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = { model.updateGitRemote(remoteDraft) },
-                enabled = !model.busy && remoteDraft.isNotBlank() && remoteDraft != model.gitRemote) { Text("Save remote") }
-            if (model.gitRemote != null) TextButton(onClick = model::testGitAccess, enabled = !model.busy) { Text("Test access") }
-        }
-        if (sshSuggestion != null) {
-            Surface(shape = RoundedCornerShape(6.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
-                Column(Modifier.fillMaxWidth().padding(10.dp)) {
-                    Text(if (model.gitAccount.githubToken != null) "This origin uses HTTPS and your saved access token. " +
-                        "You can also switch it to SSH to use your key." else "This origin uses HTTPS. For private repositories " +
-                        "and push, save your own access token above or switch to SSH to use your key.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TextButton(onClick = model::useSshRemote, enabled = !model.busy,
-                        contentPadding = PaddingValues(horizontal = 0.dp)) { Text("Switch to $sshSuggestion", maxLines = 1,
-                            overflow = TextOverflow.Ellipsis) }
+fun GitHubScreen(model: WorkspaceModel, onBack: () -> Unit) {
+    val account = model.gitAccount
+    val connected = account.githubToken
+    val code = LocalCodeColors.current
+    var query by remember { mutableStateOf("") }
+    var urlDialog by remember { mutableStateOf(false) }
+    var confirmDisconnect by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Row(Modifier.fillMaxWidth().height(52.dp).background(code.header).padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            WorkspaceIconButton(ToolIcon.Back, "Back", onBack)
+            Column(Modifier.weight(1f).padding(start = 4.dp)) {
+                Text("GITHUB", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(connected?.user?.let { "@$it" } ?: "Connect your account", style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (connected != null) {
+                WorkspaceIconButton(ToolIcon.Refresh, "Reload repositories", model::loadGitHubRepos)
+                TextButton(onClick = { confirmDisconnect = true }, enabled = !model.busy) {
+                    Text("Disconnect", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                 }
             }
         }
-
-        SectionLabel("SYNC  ·  ${model.gitSnapshot.branch.ifBlank { "no branch" }}")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val ready = !model.busy && model.gitRemote != null
-            OutlinedButton(onClick = model::fetchGit, enabled = ready, modifier = Modifier.weight(1f)) { Text("Fetch") }
-            OutlinedButton(onClick = model::pullGit, enabled = ready, modifier = Modifier.weight(1f)) { Text("Pull") }
-            Button(onClick = model::pushGit, enabled = ready && model.gitSnapshot.hasHead, modifier = Modifier.weight(1f)) { Text("Push") }
+        if (connected == null) ConnectGitHub(model)
+        else {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(query, { query = it }, modifier = Modifier.weight(1f), singleLine = true,
+                    placeholder = { Text("Search ${model.githubRepos.size} repositories") },
+                    leadingIcon = { ToolGlyph(ToolIcon.Search, MaterialTheme.colorScheme.onSurfaceVariant) },
+                    textStyle = MaterialTheme.typography.bodyMedium)
+                TextButton(onClick = { urlDialog = true }) { Text("URL") }
+            }
+            when {
+                model.githubLoading && model.githubRepos.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+                model.githubError != null && model.githubRepos.isEmpty() -> Column(Modifier.fillMaxWidth().padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(model.githubError.orEmpty(), color = MaterialTheme.colorScheme.error)
+                    Button(onClick = model::loadGitHubRepos) { Text("Try again") }
+                }
+                else -> {
+                    val shown = model.githubRepos.filter { query.isBlank() || it.fullName.contains(query.trim(), true) }
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        if (shown.isEmpty()) item {
+                            Text(if (model.githubRepos.isEmpty()) "No repositories on this account yet." else "No repository matches “$query”.",
+                                Modifier.padding(20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        items(shown, key = { it.fullName }) { repo -> RepoRow(repo, enabled = !model.busy) { model.cloneGitHubRepo(repo) } }
+                    }
+                }
+            }
         }
-        if (model.gitRemote == null)
-            Text("Set an origin remote to fetch, pull and push.", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(4.dp))
-        Text("Git runs on Codriod's built-in engine (JGit) with your own SSH key. The phone's terminal is " +
-            "Android's shell, which has no git command.",
+    }
+    if (urlDialog) CloneUrlDialog(model) { urlDialog = false }
+    if (confirmDisconnect) AlertDialog(onDismissRequest = { confirmDisconnect = false },
+        title = { Text("Disconnect GitHub?") },
+        text = { Text("The token is removed from this phone. Cloned projects stay. You can also delete the token at github.com/settings/tokens.") },
+        confirmButton = { TextButton(onClick = { confirmDisconnect = false; model.disconnectGitHub() }) {
+            Text("Disconnect", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton(onClick = { confirmDisconnect = false }) { Text("Cancel") } })
+}
+
+@Composable
+private fun ConnectGitHub(model: WorkspaceModel) {
+    var token by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Connect GitHub", style = MaterialTheme.typography.titleLarge)
+        Text("Use your own GitHub access token. You will see all your repositories, clone them here, and pull or push later.",
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Step("1", "Create a token on GitHub", "Tick the “repo” box, choose an expiry and press Generate token. Copy the token.")
+        OutlinedButton(onClick = { model.gitAccount.openUrl(GitAccountController.GITHUB_NEW_TOKEN_URL) }, modifier = Modifier.fillMaxWidth()) {
+            Text("Open GitHub token page")
+        }
+        Step("2", "Paste it here", "It starts with ghp_ or github_pat_.")
+        OutlinedTextField(token, { token = it.trim().take(255) }, modifier = Modifier.fillMaxWidth(), singleLine = true,
+            enabled = !model.busy, placeholder = { Text("Paste your token") },
+            visualTransformation = PasswordVisualTransformation(), textStyle = MaterialTheme.typography.bodyMedium)
+        Button(onClick = { model.connectGitHub(token); token = "" }, enabled = !model.busy && token.length >= 20,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp)) {
+            Text(if (model.busy) "Connecting…" else "Connect")
+        }
+        Text("The token is checked with GitHub and kept encrypted on this phone only. It is sent only to github.com and never to AI agents.",
             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
-/** The person's own GitHub sign-in: an SSH key made on this phone and added by them on github.com. */
 @Composable
-fun GitHubAccountSection(model: WorkspaceModel) {
-    val account = model.gitAccount
-    val key = account.defaultKey()
-    var showKey by remember { mutableStateOf(false) }
-    var confirmDelete by remember { mutableStateOf(false) }
-    var newKeyDialog by remember { mutableStateOf(false) }
-    SectionLabel("GITHUB LOGIN")
-    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
-        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (key == null) {
-                Text("Not signed in", style = MaterialTheme.typography.titleMedium)
-                Text("Codriod creates an SSH key on this phone. You add its public key to your own GitHub account " +
-                    "on github.com and approve it there. Codriod never sees your GitHub password and has no account of its own. " +
-                    "You can also use an access token you create yourself (below).",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Button(onClick = model::startGitHubLogin, enabled = !model.busy, modifier = Modifier.fillMaxWidth()) {
-                    Text("Set up GitHub login")
-                }
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(key.verifiedUser?.let { "Signed in as @$it" } ?: "Key ready: add it on GitHub, then Verify",
-                            style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("${key.label} · ${key.fingerprint}", style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    Box(Modifier.size(8.dp).background(
-                        if (key.verifiedUser != null) LocalCodeColors.current.success else MaterialTheme.colorScheme.outline,
-                        RoundedCornerShape(4.dp)))
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedButton(onClick = model::startGitHubLogin, enabled = !model.busy, modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 6.dp)) { Text("Add on GitHub", maxLines = 1) }
-                    Button(onClick = model::verifyGitHub, enabled = !model.busy, modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 6.dp)) { Text("Verify", maxLines = 1) }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "Hide public key" else "Public key") }
-                    TextButton(onClick = { account.copyPublicKey(key); model.message = "Public key copied" }) { Text("Copy") }
-                    Spacer(Modifier.weight(1f))
-                    TextButton(onClick = { confirmDelete = true }, enabled = !model.busy) {
-                        Text("Remove", color = MaterialTheme.colorScheme.error)
-                    }
-                }
-                if (showKey) Text(key.publicKey, fontFamily = FontFamily.Monospace, fontSize = 10.sp,
-                    modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background, RoundedCornerShape(4.dp))
-                        .padding(8.dp))
-                if (account.keys.size > 1 || key.verifiedUser != null) {
-                    Text("KEYS ON THIS PHONE", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    account.keys.forEach { item ->
-                        Row(Modifier.fillMaxWidth().clickable(enabled = !model.busy && item.id != key.id) {
-                            model.setDefaultGitKey(item.id)
-                        }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = item.id == key.id, onClick = { model.setDefaultGitKey(item.id) },
-                                enabled = !model.busy, modifier = Modifier.size(28.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(item.label + (item.verifiedUser?.let { "  ·  @$it" } ?: ""),
-                                style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1)
-                        }
-                    }
-                    TextButton(onClick = { newKeyDialog = true }, enabled = !model.busy) { Text("Add key for another account") }
-                }
-            }
-            Text("Private key: ${account.keyStorage}. It never leaves this phone and is excluded from backups.",
-                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun Step(number: String, title: String, detail: String) {
+    Row(verticalAlignment = Alignment.Top) {
+        Box(Modifier.size(24.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+            Text(number, color = MaterialTheme.colorScheme.onPrimary, fontSize = 12.sp)
+        }
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-    GitHubTokenSection(model)
-    if (confirmDelete && key != null) AlertDialog(onDismissRequest = { confirmDelete = false },
-        title = { Text("Remove SSH key?") },
-        text = { Text("“${key.label}” is deleted from this phone. Also delete it from github.com/settings/keys so it can't be used anywhere.") },
-        confirmButton = { TextButton(onClick = { confirmDelete = false; model.deleteGitKey(key.id) }) {
-            Text("Remove", color = MaterialTheme.colorScheme.error) } },
-        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
-    if (newKeyDialog) WorkspaceNameDialog(title = "New SSH key", confirmText = "Create", initial = "Work",
-        onDismiss = { newKeyDialog = false }, onConfirm = { newKeyDialog = false; model.createGitKey(it) })
 }
 
 @Composable
-fun CloneRepositoryDialog(model: WorkspaceModel, onDismiss: () -> Unit) {
-    var url by remember { mutableStateOf("") }
-    var name by remember { mutableStateOf("") }
-    val suggestedName = url.trim().trimEnd('/').substringAfterLast('/').substringAfterLast(':').removeSuffix(".git")
-    val isSsh = GitRemoteService.isSsh(url.trim())
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Clone repository") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(url, { url = it.trim().take(400) }, singleLine = true, label = { Text("Repository URL") },
-                    placeholder = { Text("git@github.com:you/repo.git") }, textStyle = MaterialTheme.typography.bodySmall)
-                OutlinedTextField(name, { name = it.take(64) }, singleLine = true, label = { Text("Project name") },
-                    placeholder = { Text(suggestedName.ifBlank { "my-repo" }) })
-                Text(if (isSsh) "Private and public repositories over SSH use your own SSH key below."
-                    else "Public HTTPS repositories clone without signing in. Private ones use your saved access token, or the SSH address.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                GitHubAccountSection(model)
+private fun RepoRow(repo: GitHubRepo, enabled: Boolean, onClone: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        ToolGlyph(ToolIcon.Git, MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(repo.fullName, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false))
+                Spacer(Modifier.width(6.dp))
+                Text(if (repo.private) "Private" else "Public", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 4.dp, vertical = 1.dp))
             }
+            if (repo.description.isNotBlank()) Text(repo.description, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.width(8.dp))
+        OutlinedButton(onClick = onClone, enabled = enabled, contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Clone") }
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+}
+
+@Composable
+private fun CloneUrlDialog(model: WorkspaceModel, onDismiss: () -> Unit) {
+    var url by remember { mutableStateOf("") }
+    val name = url.trim().trimEnd('/').substringAfterLast('/').substringAfterLast(':').removeSuffix(".git")
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Clone from URL") },
+        text = {
+            OutlinedTextField(url, { url = it.trim().take(400) }, singleLine = true, label = { Text("Repository URL") },
+                placeholder = { Text("https://github.com/owner/repo") }, textStyle = MaterialTheme.typography.bodySmall)
         },
         confirmButton = { TextButton(enabled = url.isNotBlank() && !model.busy, onClick = {
-            onDismiss(); model.cloneRepository(url, name.ifBlank { suggestedName.ifBlank { "Cloned repository" } })
+            onDismiss(); model.cloneRepository(url, name.ifBlank { "Cloned repository" })
         }) { Text("Clone") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
-/** Shown when a Git server's identity is unknown. GitHub's keys are pinned and never shown here. */
+/** Remote tab of Source Control: who is connected, the origin, and Pull / Push. */
+@Composable
+fun GitRemoteTab(model: WorkspaceModel) {
+    val project = model.project ?: return
+    val connected = model.gitAccount.githubToken
+    var remoteDraft by remember(project.id, model.gitRemote) { mutableStateOf(model.gitRemote.orEmpty()) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("GitHub", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(connected?.let { "Connected as @${it.user ?: "you"}" } ?: "Not connected", style = MaterialTheme.typography.titleMedium)
+                }
+                if (connected == null) Button(onClick = model::showGitHub) { Text("Connect") }
+                else TextButton(onClick = model::showGitHub) { Text("My repos") }
+            }
+        }
+
+        Text("ORIGIN", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedTextField(remoteDraft, { remoteDraft = it.trim().take(400) }, modifier = Modifier.fillMaxWidth(),
+            singleLine = true, enabled = !model.busy, textStyle = MaterialTheme.typography.bodySmall,
+            placeholder = { Text("https://github.com/you/repo.git") })
+        if (remoteDraft.isNotBlank() && remoteDraft != model.gitRemote)
+            OutlinedButton(onClick = { model.updateGitRemote(remoteDraft) }, enabled = !model.busy) { Text("Save origin") }
+
+        Text("SYNC  ·  ${model.gitSnapshot.branch.ifBlank { "no branch" }}", style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val ready = !model.busy && model.gitRemote != null
+            OutlinedButton(onClick = model::pullGit, enabled = ready, modifier = Modifier.weight(1f).heightIn(min = 46.dp)) { Text("Pull") }
+            Button(onClick = model::pushGit, enabled = ready && model.gitSnapshot.hasHead,
+                modifier = Modifier.weight(1f).heightIn(min = 46.dp)) { Text("Push") }
+        }
+        Text(when {
+            model.gitRemote == null -> "Set the origin above, or clone a repository from your GitHub list."
+            connected == null -> "Connect GitHub to push and to pull private repositories."
+            else -> "Commit your changes in the Changes tab, then Push."
+        }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** Only shown for non-GitHub SSH servers. GitHub's keys are pinned and never shown here. */
 @Composable
 fun HostTrustDialog(model: WorkspaceModel) {
     val host = model.gitAccount.pendingHost ?: return
@@ -193,54 +220,4 @@ fun HostTrustDialog(model: WorkspaceModel) {
         },
         confirmButton = { TextButton(onClick = model::trustPendingHost) { Text("Trust") } },
         dismissButton = { TextButton(onClick = { model.gitAccount.pendingHost = null }) { Text("Cancel") } })
-}
-
-/** Optional: an access token the user creates on their own GitHub account, for HTTPS remotes. */
-@Composable
-fun GitHubTokenSection(model: WorkspaceModel) {
-    val account = model.gitAccount
-    val saved = account.githubToken
-    var draft by remember { mutableStateOf("") }
-    var confirmRemove by remember { mutableStateOf(false) }
-    SectionLabel("ACCESS TOKEN (HTTPS)")
-    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
-        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (saved != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(saved.user?.let { "Token saved for @$it" } ?: "Token saved", style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f))
-                    TextButton(onClick = { confirmRemove = true }, enabled = !model.busy) {
-                        Text("Remove", color = MaterialTheme.colorScheme.error)
-                    }
-                }
-                Text("Used only for https://github.com remotes. It is never shown again, never sent to AI agents, " +
-                    "and stays encrypted on this phone.", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else {
-                Text("Prefer HTTPS? Create a token on your GitHub account (scope: repo) and paste it here. " +
-                    "Codriod checks it with GitHub and stores it encrypted on this phone.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                OutlinedTextField(draft, { draft = it.trim().take(255) }, modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    enabled = !model.busy, placeholder = { Text("ghp_… or github_pat_…") },
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    textStyle = MaterialTheme.typography.bodySmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedButton(onClick = { account.openUrl(GitAccountController.GITHUB_NEW_TOKEN_URL) },
-                        modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 6.dp)) {
-                        Text("Create on GitHub", maxLines = 1)
-                    }
-                    Button(onClick = { model.saveGitHubToken(draft); draft = "" }, enabled = !model.busy && draft.length >= 20,
-                        modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 6.dp)) {
-                        Text("Check & save", maxLines = 1)
-                    }
-                }
-            }
-        }
-    }
-    if (confirmRemove) AlertDialog(onDismissRequest = { confirmRemove = false },
-        title = { Text("Remove access token?") },
-        text = { Text("The token is deleted from this phone. Also revoke it at github.com/settings/tokens if you no longer need it.") },
-        confirmButton = { TextButton(onClick = { confirmRemove = false; model.removeGitHubToken() }) {
-            Text("Remove", color = MaterialTheme.colorScheme.error) } },
-        dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Cancel") } })
 }

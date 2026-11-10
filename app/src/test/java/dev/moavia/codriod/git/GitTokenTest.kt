@@ -61,7 +61,7 @@ class GitTokenTest {
         assertThrows(IllegalArgumentException::class.java) { GitTokenStore.validateToken("short") }
         assertEquals("octo-cat", tokens.verifyGitHubToken(token))
         val bad = assertThrows(GitAuthException::class.java) { tokens.verifyGitHubToken("ghp_" + "z".repeat(36)) }
-        assertEquals(GitAuthException.Kind.AuthFailed, bad.kind)
+        assertEquals(GitAuthException.Kind.TokenRejected, bad.kind)
 
         val url = "$base/repo.git"
         val anonymous = assertThrows(GitAuthException::class.java) { remote.testAccess(url, allowLocal = true) }

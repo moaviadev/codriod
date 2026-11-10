@@ -46,14 +46,13 @@ class GitAccountTools(private val bridge: GitAccountBridge, private val approver
 
     private val readOnly = listOf(
         ToolSpec("git_account_status",
-            "Check Git and GitHub login on this phone: available Git tools, the user's SSH keys (public fingerprints only), " +
-                "whether they saved an access token, which GitHub account accepted them, and this project's remote. " +
-                "Call this first when asked to set up GitHub. Never ask the user to paste a token, password or key into the chat: " +
-                "tokens are entered only in Source Control > Remote.",
+            "Check GitHub login on this phone: whether the user connected their GitHub account (and which), this project's " +
+                "remote and author. Call this first when asked to set up GitHub. Never ask the user to paste a token or password " +
+                "into the chat: tokens are entered only on Codriod's GitHub screen.",
             schema()),
         ToolSpec("github_login_verify",
-            "Confirm GitHub accepts the user's SSH key (like `ssh -T git@github.com`) and report the GitHub username. " +
-                "Call after the user says they added the key on GitHub.",
+            "Confirm the user's saved GitHub token still works and report the GitHub username. " +
+                "Call after the user says they connected GitHub.",
             schema()),
         ToolSpec("git_test_access",
             "Check read access to a repository without changing anything. Defaults to this project's origin remote.",
@@ -62,19 +61,18 @@ class GitAccountTools(private val bridge: GitAccountBridge, private val approver
 
     private val actions = listOf(
         ToolSpec("github_login_start",
-            "Start GitHub login: create an SSH key on this phone (if none), copy its PUBLIC key and open GitHub's official " +
-                "'Add new SSH key' page. The user signs in to their own GitHub account and approves the key there. " +
-                "Codriod never sees their password or tokens. Requires the user's approval.",
+            "Start GitHub login: open Codriod's GitHub screen and GitHub's own 'New personal access token' page. The user " +
+                "creates the token on their account and pastes it on the GitHub screen themselves; you never see it. " +
+                "Requires the user's approval.",
             schema("key_name" to prop("string", "Short label for the key, e.g. 'Phone' (optional)"))),
         ToolSpec("git_configure",
-            "Configure this project's Git: author name/email, origin remote URL, and optionally switch a GitHub HTTPS " +
-                "remote to SSH so the user's key is used. Requires the user's approval.",
+            "Configure this project's Git: author name/email and the origin remote URL. Requires the user's approval.",
             schema("author_name" to prop("string", "Commit author name (optional)"),
                 "author_email" to prop("string", "Commit author email (optional)"),
                 "remote_url" to prop("string", "New origin URL (optional)"),
-                "use_ssh_remote" to prop("boolean", "Convert a GitHub HTTPS origin to SSH (optional)"))),
+                )),
         ToolSpec("git_sync",
-            "Fetch, pull or push the current branch with origin using the user's SSH key. Pull and push need approval.",
+            "Fetch, pull or push the current branch with origin using the user's GitHub login. Pull and push need approval.",
             schema("action" to JSONObject().put("type", "string").put("enum", JSONArray(listOf("fetch", "pull", "push")))
                 .put("description", "fetch, pull or push"), required = listOf("action")))
     )
@@ -98,28 +96,27 @@ class GitAccountTools(private val bridge: GitAccountBridge, private val approver
             }
             "github_login_start" -> {
                 val label = args.optString("key_name").trim().ifEmpty { "Phone" }.take(60)
-                val approved = approver.approve(ApprovalRequest.Action("Set up GitHub login",
-                    "Create an SSH key named \"$label\" on this phone (if you have none), copy its public key and open " +
-                        "github.com/settings/ssh/new. You sign in to GitHub and add the key yourself. Your private key never leaves this phone."))
+                val approved = approver.approve(ApprovalRequest.Action("Connect GitHub",
+                    "Open Codriod's GitHub screen and GitHub's token page. You create a token on your GitHub account and paste it on " +
+                        "the GitHub screen yourself; the agent never sees it."))
                 if (approved == Decision.Deny) ToolOutcome("The user declined starting GitHub login.", "GitHub login declined")
                 else {
-                    val publicKey = bridge.startGitHubLogin(label)
-                    ToolOutcome("Opened GitHub's 'Add new SSH key' page and copied this PUBLIC key to the clipboard:\n$publicKey\n" +
-                        "Tell the user: paste it into the Key field, give it a title, choose 'Authentication key' and press 'Add SSH key'. " +
-                        "GitHub may ask them to confirm with their password or 2FA on github.com. When they are done, call github_login_verify.",
-                        "Opened GitHub to add the SSH key")
+                    bridge.startGitHubLogin(label)
+                    ToolOutcome("Opened GitHub's token page and Codriod's GitHub screen. Tell the user: on GitHub tick 'repo', " +
+                        "press 'Generate token', copy it, then paste it on Codriod's GitHub screen and press Connect. " +
+                        "They will then see all their repositories and can clone any of them. Afterwards call github_login_verify.",
+                        "Opened GitHub to create a token")
                 }
             }
             "git_configure" -> {
                 val authorName = args.optString("author_name").trim().ifEmpty { null }
                 val authorEmail = args.optString("author_email").trim().ifEmpty { null }
                 val remote = args.optString("remote_url").trim().ifEmpty { null }
-                val useSsh = args.optBoolean("use_ssh_remote", false)
+                val useSsh = false
                 val changes = buildList {
                     authorName?.let { add("author name: $it") }
                     authorEmail?.let { add("author email: $it") }
                     remote?.let { add("origin: $it") }
-                    if (useSsh) add("switch a GitHub HTTPS origin to SSH")
                 }
                 if (changes.isEmpty()) return ToolOutcome("Nothing to configure.", "git_configure: no changes")
                 if (approver.approve(ApprovalRequest.Action("Configure Git", changes.joinToString("\n"))) == Decision.Deny)
@@ -147,19 +144,16 @@ class GitAccountTools(private val bridge: GitAccountBridge, private val approver
         val s = bridge.status()
         val text = buildString {
             appendLine(s.toolScan)
-            appendLine("Login methods (both owned by the user, no Codriod OAuth app or server): " +
-                "1) SSH key created on this phone and added to their GitHub account; " +
-                "2) an access token the user creates on GitHub and enters in Source Control > Remote > Access token.")
+            appendLine("Login method: the user's own GitHub access token, created on github.com and pasted on Codriod's GitHub " +
+                "screen (no Codriod OAuth app or server). After connecting, all their repositories are listed for one-tap clone.")
             appendLine("Credential storage: ${s.keyStorage}.")
-            appendLine("HTTPS access token: ${s.httpsToken ?: "none"}")
-            if (s.keys.isEmpty()) appendLine("SSH keys: none yet.")
-            else s.keys.forEach { key ->
+            appendLine("GitHub: ${s.httpsToken ?: "not connected"}")
+            s.keys.forEach { key ->
                 appendLine("SSH key \"${key.label}\" ${key.fingerprint}" + (if (key.isDefault) " (default)" else "") +
                     (key.githubUser?.let { " · verified on GitHub as @$it" } ?: " · not verified yet"))
             }
             appendLine("Project Git: " + if (s.gitInitialized) "initialized" else "not initialized")
             appendLine("Origin: ${s.remoteUrl ?: "not set"}")
-            s.sshRemoteSuggestion?.let { appendLine("Origin uses HTTPS; for private repos and push switch to SSH: $it") }
             appendLine("Author: ${s.authorName ?: "not set"} <${s.authorEmail ?: "not set"}>")
         }.trimEnd()
         return ToolOutcome(text, "Checked Git account status")

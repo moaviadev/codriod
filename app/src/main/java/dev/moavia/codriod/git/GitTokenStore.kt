@@ -1,9 +1,6 @@
 package dev.moavia.codriod.git
 
 import java.io.File
-import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.Properties
 
 /** Public facts about a saved access token. Never contains the token itself. */
@@ -73,22 +70,5 @@ class GitTokenStore(private val directory: File, private val vault: KeyVault,
     }
 
     /** Asks GitHub which account owns [token] (GET /user). Blocking network call. */
-    fun verifyGitHubToken(token: String): String {
-        val value = validateToken(token)
-        val connection = URL("${githubApi.trimEnd('/')}/user").openConnection() as HttpURLConnection
-        try {
-            connection.connectTimeout = 20_000
-            connection.readTimeout = 30_000
-            connection.setRequestProperty("Authorization", "Bearer $value")
-            connection.setRequestProperty("Accept", "application/vnd.github+json")
-            connection.setRequestProperty("User-Agent", "Codriod")
-            val code = connection.responseCode
-            if (code == 401) throw GitAuthException(GitAuthException.Kind.AuthFailed, "GitHub rejected this token (wrong, expired or revoked)")
-            if (code !in 200..299) throw GitAuthException(GitAuthException.Kind.Other, "GitHub answered HTTP $code")
-            val body = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
-            return parseLogin(body) ?: throw IOException("GitHub did not return an account name")
-        } finally {
-            connection.disconnect()
-        }
-    }
+    fun verifyGitHubToken(token: String): String = GitHubApi(githubApi).user(validateToken(token))
 }

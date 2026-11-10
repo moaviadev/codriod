@@ -46,10 +46,9 @@ The APK is emitted at `app\build\outputs\apk\debug\app-debug.apk`.
 - `agent/`: Codriod Agent, the built-in AI chat and coding agent in Add-ons. It
   works with free, pro and local providers using the user's own API keys; see
   [Codriod Agent](docs/codriod-agent.md)
-- `git/`: user-owned Git remote access (`GitRemoteService`, `SshIdentityStore`,
-  `GitTokenStore`, `CodriodHostKeys`): clone, fetch, pull and push, over SSH with a
-  key the user creates on the phone or over HTTPS with an access token the user
-  created on GitHub; see [GitHub login](docs/github-login.md)
+- `git/`: GitHub with the user's own access token (`GitHubApi`, `GitTokenStore`,
+  `GitRemoteService`): list all their repositories, clone, pull and push; see
+  [GitHub](docs/github-login.md)
 - `TerminalExecutionBackend`: separate execution abstraction; `LocalShellBackend`
   is implemented and `SshBackend` is intentionally unsupported
 - `SessionManager`: session creation, resize, input, termination, and cleanup
@@ -57,10 +56,9 @@ The APK is emitted at `app\build\outputs\apk\debug\app-debug.apk`.
 The workspace Git panel initializes a repository, reviews staged/unstaged changes,
 previews text diffs, stages and unstages files, records commits, lists history, and
 creates or checks out local branches. Branch checkout requires a clean working tree.
-Its Remote tab signs in to the user's own GitHub account, either with an SSH key or
-with an access token the user created on GitHub. It also sets the origin remote and
-fetches, pulls and pushes. Home can clone a repository. Codriod has no GitHub OAuth
-app and never asks for a GitHub password. Merge conflict resolution is not
+Its Remote tab shows the connected GitHub account and pulls and pushes. The GitHub
+screen (Home → GitHub) connects the user's own access token, lists all their
+repositories and clones them with one tap. Merge conflict resolution is not
 implemented yet.
 
 The local shell is `/system/bin/sh` with a pseudo-terminal, not an embedded
@@ -120,6 +118,5 @@ Automated verification includes:
   checkout protection.
 
 JGit repository operations also have a device instrumentation test. JVM tests in
-`app/src/test/.../git` cover SSH keys, pinned GitHub host keys, and clone/push/pull
-over a real local SSH server. The Git UI has not yet had a separate hands-on
+`app/src/test/.../git` cover the GitHub API, the token store, and clone/push/pull. The Git UI has not yet had a separate hands-on
 interaction pass on a device.

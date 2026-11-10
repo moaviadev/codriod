@@ -12,6 +12,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.moavia.codriod.git.CodriodHostKeys
+import dev.moavia.codriod.git.GitHubApi
+import dev.moavia.codriod.git.GitHubRepo
 import dev.moavia.codriod.git.GitRemoteService
 import dev.moavia.codriod.git.GitToken
 import dev.moavia.codriod.git.GitTokenStore
@@ -112,12 +114,27 @@ class GitAccountController(context: Context) {
         githubToken = tokens.get("github.com")
     }
 
+    private val github = GitHubApi()
+
     /** Checks the user's own token with GitHub, then seals it on this phone. Blocking network call. */
     fun saveGitHubToken(token: String): String {
-        val user = tokens.verifyGitHubToken(token)
-        tokens.save("github.com", token, user)
+        val clean = GitTokenStore.validateToken(token)
+        val user = github.user(clean)
+        tokens.save("github.com", clean, user)
         reload()
         return user
+    }
+
+    /** All repositories the saved token can see. Blocking network call. */
+    fun githubRepos(): List<GitHubRepo> {
+        val token = tokens.secret("github.com") ?: error("Connect your GitHub account first")
+        return github.repos(token)
+    }
+
+    /** Re-checks the saved token with GitHub. Blocking network call. */
+    fun verifyGitHubToken(): String {
+        val token = tokens.secret("github.com") ?: error("Connect your GitHub account first")
+        return github.user(token)
     }
 
     fun removeGitHubToken() { tokens.delete("github.com"); reload() }

@@ -59,7 +59,6 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
         }
     }
     var createDialog by remember { mutableStateOf(false) }
-    var cloneDialog by remember { mutableStateOf(false) }
     var newEntry by remember { mutableStateOf<String?>(null) }
     var renameEntry by remember { mutableStateOf<ProjectEntry?>(null) }
     var deleteEntry by remember { mutableStateOf<ProjectEntry?>(null) }
@@ -68,8 +67,9 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
         model.message?.let { snackbar.showSnackbar(it, withDismissAction = true); model.message = null }
     }
     BackHandler(model.project != null || model.previewOpen || model.terminalOpen || model.gitOpen ||
-        model.addonsOpen || model.agentOpen) {
+        model.addonsOpen || model.agentOpen || model.githubOpen) {
         when {
+            model.githubOpen -> model.githubOpen = false
             model.agentOpen -> model.agentOpen = false
             model.addonsOpen -> model.addonsOpen = false
             model.gitOpen -> model.closeGit()
@@ -91,11 +91,12 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
     ) { insets ->
         Box(Modifier.fillMaxSize().padding(insets)) {
             when {
+                model.githubOpen -> GitHubScreen(model, onBack = { model.githubOpen = false })
                 model.project == null -> WorkspaceHome(
                     model = model,
                     onCreate = { createDialog = true },
                     onOpenFolder = { openFolderLauncher.launch(null) },
-                    onClone = { cloneDialog = true },
+                    onClone = model::showGitHub,
                     onOpenTerminal = onOpenOriginalTerminal
                 )
                 model.agentOpen -> dev.moavia.codriod.agent.AgentScreen(model.agent, model.project?.name,
@@ -103,14 +104,13 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
                 model.addonsOpen -> dev.moavia.codriod.agent.AddonsScreen(model.agent,
                     onBack = { model.addonsOpen = false },
                     onOpenAgent = { model.agentOpen = true },
-                    onOpenGit = { model.addonsOpen = false; model.showGit() })
+                    onOpenGit = model::showGitHub)
                 model.gitOpen -> GitPanel(model)
                 model.previewOpen -> WorkspacePreview(model)
                 else -> WorkspaceEditor(model)
             }
         }
     }
-    if (cloneDialog) CloneRepositoryDialog(model) { cloneDialog = false }
     HostTrustDialog(model)
     if (createDialog) NewProjectDialog({ createDialog = false }) { name, template ->
         createDialog = false; model.createProject(name, template)

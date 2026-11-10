@@ -12,8 +12,8 @@ import dev.moavia.codriod.agent.AgentWorkspace
 import dev.moavia.codriod.agent.GitAccountBridge
 import dev.moavia.codriod.agent.ProjectAgentWorkspace
 import dev.moavia.codriod.agent.GitAccountStatus
-import dev.moavia.codriod.agent.GitKeyInfo
 import dev.moavia.codriod.git.GitAuthException
+import dev.moavia.codriod.git.GitHubRepo
 import dev.moavia.codriod.git.GitRemoteService
 import kotlinx.coroutines.*
 import java.io.File
@@ -176,6 +176,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun showAddons() {
+        githubOpen = false
         gitOpen = false
         previewOpen = false
         addonsOpen = true
@@ -431,6 +432,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         saveAll()
         addonsOpen = false
         agentOpen = false
+        githubOpen = false
         previewOpen = false
         gitOpen = true
         refreshGitState()
@@ -547,68 +549,77 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         gitAccount.remote.testAccess(url).message
     }
 
-    fun updateGitRemote(url: String) = gitTask { root -> gitAccount.remote.setRemoteUrl(root, url) }
-
-    /** Switches a GitHub HTTPS origin to the matching SSH address so the person's key is used. */
-    fun useSshRemote() = gitTask { root ->
-        val current = gitAccount.remote.remoteUrl(root) ?: error("Set the origin remote URL first")
-        val ssh = GitRemoteService.githubSshUrl(current) ?: error("Origin is not a GitHub HTTPS address")
-        gitAccount.remote.setRemoteUrl(root, ssh)
+    /** GitHub SSH addresses are turned into HTTPS ones so the user's saved token is used. */
+    fun updateGitRemote(url: String) = gitTask { root ->
+        gitAccount.remote.setRemoteUrl(root, GitRemoteService.githubHttpsUrl(url) ?: url)
     }
 
     fun cloneRepository(url: String, name: String) = task {
+        val target = GitRemoteService.githubHttpsUrl(url) ?: url
         val created = remoteCall {
-            store.createFromClone(name) { folder -> gitAccount.remote.clone(url, folder) }
+            store.createFromClone(name) { folder -> gitAccount.remote.clone(target, folder) }
         }
         withContext(Dispatchers.IO) { gitService.ensureMetadataExcluded(store.root(created.id)) }
         projects = withContext(Dispatchers.IO) { store.projects() }
+        githubOpen = false
         loadProject(created)
         message = "Cloned into ${created.name}"
     }
 
-    fun createGitKey(label: String) = task {
-        val key = withContext(Dispatchers.IO) { gitAccount.createKey(label) }
-        message = "SSH key \"${key.label}\" created. Add its public key to your GitHub account."
+    // ---- GitHub: the user's own access token, their repositories, clone ---------------------------
+
+    var githubOpen by mutableStateOf(false)
+    var githubRepos by mutableStateOf<List<GitHubRepo>>(emptyList())
+        private set
+    var githubLoading by mutableStateOf(false)
+        private set
+    var githubError by mutableStateOf<String?>(null)
+        private set
+
+    fun showGitHub() {
+        gitOpen = false
+        previewOpen = false
+        addonsOpen = false
+        agentOpen = false
+        githubOpen = true
+        if (gitAccount.githubToken != null && githubRepos.isEmpty()) loadGitHubRepos()
     }
 
-    fun deleteGitKey(id: String) = task {
-        withContext(Dispatchers.IO) { gitAccount.deleteKey(id) }
-        message = "SSH key deleted from this phone. Also remove it at github.com/settings/keys."
+    fun loadGitHubRepos() {
+        if (githubLoading) return
+        viewModelScope.launch {
+            githubLoading = true
+            githubError = null
+            try { githubRepos = withContext(Dispatchers.IO) { gitAccount.githubRepos() } }
+            catch (error: CancellationException) { throw error }
+            catch (error: Exception) { githubError = error.message ?: "Could not load repositories" }
+            finally { githubLoading = false }
+        }
     }
 
-    fun setDefaultGitKey(id: String) = task { withContext(Dispatchers.IO) { gitAccount.setDefault(id) } }
-
-    /** Creates a key if needed, copies the PUBLIC key and opens GitHub's official "Add SSH key" page. */
-    fun startGitHubLogin() = task {
-        val key = gitAccount.defaultKey() ?: withContext(Dispatchers.IO) { gitAccount.createKey("Phone") }
-        gitAccount.copyPublicKey(key)
-        gitAccount.openGitHubAddKey()
-        message = "Public key copied. Paste it on GitHub, then tap Verify."
+    /** Checks the token the user created on GitHub, saves it on this phone and lists their repositories. */
+    fun connectGitHub(token: String) = task {
+        val user = withContext(Dispatchers.IO) { gitAccount.saveGitHubToken(token) }
+        message = "Connected to GitHub as @$user"
+        githubRepos = emptyList()
+        loadGitHubRepos()
     }
 
-    fun verifyGitHub() = task {
-        val key = gitAccount.defaultKey() ?: error("Create an SSH key first")
-        val user = remoteCall { gitAccount.verifyGitHub(key.id) }
-        message = "GitHub login works: signed in as @$user"
-    }
-
-    /** Saves an access token the user created on their own GitHub account (verified with GitHub first). */
-    fun saveGitHubToken(token: String) = task {
-        val user = remoteCall { gitAccount.saveGitHubToken(token) }
-        message = "Access token saved for @$user. HTTPS remotes on github.com now use it."
-    }
-
-    fun removeGitHubToken() = task {
+    fun disconnectGitHub() = task {
         withContext(Dispatchers.IO) { gitAccount.removeGitHubToken() }
-        message = "Token removed from this phone. Revoke it at github.com/settings/tokens too."
+        githubRepos = emptyList()
+        githubError = null
+        message = "Disconnected. You can also delete the token at github.com/settings/tokens."
     }
+
+    fun cloneGitHubRepo(repo: GitHubRepo) = cloneRepository(repo.cloneUrl, repo.name)
 
     fun trustPendingHost() {
         gitAccount.trustPendingHost()
         message = "Server trusted. Try again."
     }
 
-    /** For the coding agent. Every call acts with the person's own key; secrets never leave the Git layer. */
+    /** For the coding agent. Every call acts with the user's own token; it never leaves the Git layer. */
     val gitAccountBridge = object : GitAccountBridge {
         private fun projectRoot(): File = project?.let { store.root(it.id) } ?: error("Open a project first")
 
@@ -616,42 +627,35 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
             val root = project?.let { runCatching { store.root(it.id) }.getOrNull() }
             val snapshot = root?.let { runCatching { gitService.snapshot(it) }.getOrNull() }
             val remoteUrl = if (root != null && snapshot?.initialized == true) runCatching { gitAccount.remote.remoteUrl(root) }.getOrNull() else null
-            val default = gitAccount.identities.defaultIdentity()?.id
             GitAccountStatus(
                 toolScan = GitRemoteService.detectTools().summary,
                 keyStorage = gitAccount.keyStorage,
-                keys = gitAccount.identities.list().map { GitKeyInfo(it.label, it.fingerprint, it.verifiedUser, it.id == default) },
-                httpsToken = gitAccount.tokens.get("github.com")?.let { "saved for github.com" + (it.user?.let { u -> " (@$u)" } ?: "") },
+                keys = emptyList(),
+                httpsToken = gitAccount.tokens.get("github.com")?.let { "connected" + (it.user?.let { u -> " as @$u" } ?: "") },
                 gitInitialized = snapshot?.initialized == true,
                 remoteUrl = remoteUrl,
-                sshRemoteSuggestion = remoteUrl?.let(GitRemoteService::githubSshUrl),
+                sshRemoteSuggestion = null,
                 authorName = snapshot?.authorName?.ifBlank { null },
                 authorEmail = snapshot?.authorEmail?.ifBlank { null })
         }
 
+        /** Opens Codriod's GitHub screen and GitHub's token page; the user creates and pastes the token. */
         override suspend fun startGitHubLogin(keyName: String): String {
-            val key = gitAccount.identities.defaultIdentity() ?: withContext(Dispatchers.IO) { gitAccount.createKey(keyName) }
             withContext(Dispatchers.Main) {
-                gitAccount.reload()
-                gitAccount.copyPublicKey(key)
-                gitAccount.openGitHubAddKey()
+                showGitHub()
+                gitAccount.openUrl(GitAccountController.GITHUB_NEW_TOKEN_URL)
             }
-            return key.publicKey
+            return "Opened GitHub's 'New personal access token' page and Codriod's GitHub screen."
         }
 
-        override suspend fun verifyGitHub(): String {
-            val key = gitAccount.identities.defaultIdentity() ?: error("Create an SSH key first (github_login_start)")
-            return remoteCall { gitAccount.verifyGitHub(key.id) }
-        }
+        override suspend fun verifyGitHub(): String = remoteCall { gitAccount.verifyGitHubToken() }
 
         override suspend fun configure(authorName: String?, authorEmail: String?, remoteUrl: String?, useSshRemote: Boolean): String {
             val root = projectRoot()
             val result = withContext(Dispatchers.IO) {
                 require(gitService.snapshot(root).initialized) { "Initialize Git for this project first" }
                 gitAccount.remote.setAuthor(root, authorName, authorEmail)
-                remoteUrl?.let { gitAccount.remote.setRemoteUrl(root, it) }
-                if (useSshRemote) gitAccount.remote.remoteUrl(root)?.let(GitRemoteService::githubSshUrl)
-                    ?.let { gitAccount.remote.setRemoteUrl(root, it) }
+                remoteUrl?.let { gitAccount.remote.setRemoteUrl(root, GitRemoteService.githubHttpsUrl(it) ?: it) }
                 "Git configured. Origin: ${gitAccount.remote.remoteUrl(root) ?: "not set"}"
             }
             refreshGitState()

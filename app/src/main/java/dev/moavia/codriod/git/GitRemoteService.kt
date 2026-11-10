@@ -56,6 +56,11 @@ class GitRemoteService(private val identities: SshIdentityStore, private val hos
             "git@github.com:${match.groupValues[1]}/${match.groupValues[2]}.git"
         }
 
+        /** git@github.com:owner/repo.git → https://github.com/owner/repo.git, so the saved token is used. */
+        fun githubHttpsUrl(url: String): String? =
+            Regex("^(?:ssh://)?git@github\\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\\.git)?/?$").matchEntire(url.trim())
+                ?.let { "https://github.com/${it.groupValues[1]}/${it.groupValues[2]}.git" }
+
         fun isSsh(url: String) = url.startsWith("ssh://") || SCP_LIKE.matches(url.trim())
 
         fun validateRemoteUrl(url: String, allowLocal: Boolean = false): String {

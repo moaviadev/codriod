@@ -47,7 +47,7 @@ fun AddonsScreen(agent: AgentController, onBack: () -> Unit, onOpenAgent: () -> 
     val agentStatus = agent.provider?.let { p -> agent.modelId?.let { "${p.name} · $it" } } ?: "Set up"
     val rows = listOf(
         AddonRow("Codriod Agent", "AI chat and coding agent · ${Providers.all.size} providers, free and pro", agentStatus, true, onOpenAgent),
-        AddonRow("Git & GitHub", "Your own GitHub login (SSH key or token), clone, pull and push", "Built in", true, onOpenGit),
+        AddonRow("GitHub", "Connect with your token, see all your repositories, clone, pull and push", "Built in", true, onOpenGit),
         AddonRow("Python", "Python runtime and pip for this phone", null, false),
         AddonRow("Node.js", "Node.js runtime and npm", null, false),
         AddonRow("Java & Kotlin", "JDK, Kotlin and Gradle tools", null, false),
