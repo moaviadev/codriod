@@ -21,6 +21,17 @@ Requirements:
 - About 1–2 GB of free space.
 - Internet while installing.
 
+## While it installs
+
+- The screen shows the percentage, **the time left** (for example "about 6 min left"), how long it has been running, and
+  the usual total for what you picked (for example "8–15 min").
+- Each running step has its own bar. The numbers come from real progress:
+  - apt's status lines (packages downloaded and installed)
+  - Node.js download stages
+  - the Ubuntu download and unpack counters
+- The estimate adapts to your measured internet speed.
+- The install keeps going if you switch apps. A notification shows the progress and the time left.
+
 ## Using a CLI
 
 - Every installed CLI gets a tab on the editor's right edge, under **Codriod**. Tapping the tab opens the terminal in

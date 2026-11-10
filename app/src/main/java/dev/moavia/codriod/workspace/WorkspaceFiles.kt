@@ -9,6 +9,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,7 +46,8 @@ fun ProjectFilesSheet(model: WorkspaceModel, onNewFile: () -> Unit, onNewFolder:
                             Modifier.width(18.dp).clickable(enabled = entry.directory) {
                                 collapsed = if (entry.path in collapsed) collapsed - entry.path else collapsed + entry.path
                             }, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        ToolGlyph(if (entry.directory) ToolIcon.Folder else ToolIcon.File,
+                        if (!entry.directory && ImageFiles.isImage(entry.path)) Text("🖼", fontSize = 13.sp)
+                        else ToolGlyph(if (entry.directory) ToolIcon.Folder else ToolIcon.File,
                             if (entry.path == model.activePath) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(name, Modifier.weight(1f).clickable(enabled = !entry.directory) { onOpen(entry.path) }

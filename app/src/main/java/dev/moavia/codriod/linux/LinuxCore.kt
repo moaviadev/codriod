@@ -350,9 +350,11 @@ object LinuxScripts {
 set -e
 export DEBIAN_FRONTEND=noninteractive
 echo "::step Updating package lists"
+echo "::progress 2"
 apt-get update
 echo "::step Installing basic tools (git, curl, python)"
-apt-get install -y --no-install-recommends $BASE_PACKAGES
+echo "::progress 10"
+apt-get install -y --no-install-recommends -o APT::Status-Fd=1 $BASE_PACKAGES
 grep -qF '${RootfsSetup.BASHRC_HOOK}' /root/.bashrc 2>/dev/null || echo '${RootfsSetup.BASHRC_HOOK}' >> /root/.bashrc
 echo "::step Basic tools ready"
 """.trimStart()
@@ -367,14 +369,18 @@ case "${'$'}(uname -m)" in
 esac
 base=https://nodejs.org/dist/latest-v$major.x
 echo "::step Finding the latest Node.js $major"
+echo "::progress 3"
 sums=${'$'}(curl -fsSL --retry 4 "${'$'}base/SHASUMS256.txt")
 file=${'$'}(printf '%s\n' "${'$'}sums" | grep -o "node-v[0-9.]*-linux-${'$'}arch.tar.xz" | head -n 1)
 [ -n "${'$'}file" ] || { echo "::fail Could not find Node.js for ${'$'}arch"; exit 4; }
 echo "::step Downloading ${'$'}file"
+echo "::progress 8"
 curl -fL --retry 4 --retry-delay 3 -o "/tmp/${'$'}file" "${'$'}base/${'$'}file"
 echo "::step Checking the download"
+echo "::progress 65"
 printf '%s\n' "${'$'}sums" | grep " ${'$'}file${'$'}" | (cd /tmp && sha256sum -c -)
 echo "::step Unpacking Node.js"
+echo "::progress 70"
 rm -rf /opt/node.new && mkdir -p /opt/node.new
 tar -xJf "/tmp/${'$'}file" -C /opt/node.new --strip-components=1
 rm -rf /opt/node && mv /opt/node.new /opt/node && rm -f "/tmp/${'$'}file"
@@ -384,6 +390,7 @@ for t in npm:npm/bin/npm-cli.js npx:npm/bin/npx-cli.js corepack:corepack/dist/co
   if [ -f "${'$'}js" ]; then rm -f "/opt/node/bin/${'$'}n"; printf '#!/bin/sh\nexec /opt/node/bin/node %s "${'$'}@"\n' "${'$'}js" > "/opt/node/bin/${'$'}n"; chmod 755 "/opt/node/bin/${'$'}n"; fi
 done
 export PATH=/opt/node/bin:${'$'}PATH
+echo "::progress 95"
 npm config set fund false
 npm config set audit false
 npm config set update-notifier false
@@ -403,7 +410,7 @@ npm install -g --no-fund --no-audit "$pkg@latest"
     fun npmRemove(pkg: String) = "export PATH=/opt/node/bin:\$PATH\nnpm uninstall -g \"$pkg\"\n"
 
     fun apt(packages: String) = "set -e\nexport DEBIAN_FRONTEND=noninteractive\necho \"::step Installing $packages\"\n" +
-        "apt-get install -y --no-install-recommends $packages\n"
+        "apt-get install -y --no-install-recommends -o APT::Status-Fd=1 $packages\n"
 
     fun shell(command: String) = "set -e\nexport PATH=/opt/node/bin:\$PATH\n$command\n"
 }

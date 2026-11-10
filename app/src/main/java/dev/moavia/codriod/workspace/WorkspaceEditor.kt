@@ -48,8 +48,9 @@ fun WorkspaceEditor(model: WorkspaceModel) {
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val boxHeightPx = with(density) { maxHeight.toPx() }
             Column(Modifier.fillMaxSize()) {
-                CodeEditor(model, Modifier.weight(1f))
-                CodingKeys(model)
+                val active = model.activeDocument
+                if (active != null && active.image) ImageViewer(model, active, Modifier.weight(1f))
+                else { CodeEditor(model, Modifier.weight(1f)); CodingKeys(model) }
                 Row(Modifier.fillMaxWidth().height(31.dp).background(code.header)
                     .clickable { if (model.terminalOpen) model.terminalOpen = false else model.showTerminal() },
                     verticalAlignment = Alignment.CenterVertically) {
@@ -104,7 +105,8 @@ private fun EditorTabs(model: WorkspaceModel) {
                 .background(if (selected) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.surface)
                 .clickable { model.select(document.path) }.padding(start = 11.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                ToolGlyph(if (document.path.endsWith(".html", true) || document.path.endsWith(".sh")) ToolIcon.File
+                if (document.image) Text("🖼", fontSize = 12.sp)
+                else ToolGlyph(if (document.path.endsWith(".html", true) || document.path.endsWith(".sh")) ToolIcon.File
                     else ToolIcon.Edit, if (selected) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant, Modifier.size(15.dp))
                 Spacer(Modifier.width(6.dp))

@@ -98,6 +98,13 @@ class SafWorkspaceHelper(private val context: Context) {
         return String(bytes, Charsets.UTF_8)
     }
 
+    fun readBytes(uriString: String, path: String, max: Int): ByteArray {
+        val root = getRoot(uriString) ?: throw IOException("Storage is inaccessible. Please check permissions.")
+        val doc = findDoc(root, path) ?: throw FileNotFoundException("File not found: $path")
+        require(doc.length() <= max) { "The file is too large to open" }
+        return context.contentResolver.openInputStream(doc.uri)?.use { it.readBytes() } ?: throw IOException("Cannot read file: $path")
+    }
+
     fun write(uriString: String, path: String, text: String) {
         val root = getRoot(uriString)
             ?: throw IOException("Storage is inaccessible. Please check permissions.")

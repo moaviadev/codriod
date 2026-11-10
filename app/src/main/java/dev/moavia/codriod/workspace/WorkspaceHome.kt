@@ -47,6 +47,15 @@ fun WorkspaceHome(
     onOpenTerminal: () -> Unit
 ) {
     var newSheet by remember { mutableStateOf<String?>(null) }
+    // Re-check storage access when coming back from the "All files access" settings page.
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) model.refreshStorage()
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         if (model.projects.isEmpty()) FirstRun(model, onNew = { newSheet = it ?: "Web" }, onOpenFolder, onClone, onOpenTerminal)
         else HomeWithProjects(model, onNew = { newSheet = "Web" }, onOpenFolder, onClone, onOpenTerminal)
@@ -75,6 +84,43 @@ private fun TopBar(model: WorkspaceModel, onOpenTerminal: () -> Unit, showSettin
                     DropdownMenuItem({ Text((if (model.themeMode == mode) "✓  " else "     ") + mode) }, { menu = false; model.updateTheme(mode) })
                 }
             }
+        }
+    }
+}
+
+/**
+ * Asks for storage access so projects are saved in Internal storage/Codriod (visible to file managers and other apps),
+ * and offers to move older projects out of Codriod's private storage.
+ */
+@Composable
+fun StorageBanner(model: WorkspaceModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val legacy = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()) { model.refreshStorage() }
+    if (model.storageGranted && model.privateProjectCount == 0) return
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp))
+        .background(Color(0xFF0B2A44)).border(1.dp, Color(0xFF1D4E7A), RoundedCornerShape(14.dp)).padding(14.dp)) {
+        if (!model.storageGranted) {
+            Text("📁  Save projects in your phone's storage", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text("Projects will be normal folders in Internal storage/Codriod, next to Downloads, so file managers, other apps " +
+                "and your computer can open them. Opened folders are edited in place.", color = Color(0xFFB9D7F2), fontSize = 12.sp,
+                lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp))
+            Button(onClick = {
+                if (StorageAccess.usesSettingsPage) runCatching { context.startActivity(StorageAccess.settingsIntent(context)) }
+                    .onFailure { runCatching { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) } }
+                else legacy.launch(StorageAccess.legacyPermissions)
+            }, modifier = Modifier.padding(top = 10.dp), colors = ButtonDefaults.buttonColors(containerColor = Blue)) {
+                Text(if (StorageAccess.usesSettingsPage) "Allow “All files access”" else "Allow storage")
+            }
+            if (StorageAccess.usesSettingsPage) Text("In the page that opens, turn on Codriod, then come back.", color = Color(0xFF8DB4D8),
+                fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
+        } else {
+            Text("📦  Move ${model.privateProjectCount} older project${if (model.privateProjectCount == 1) "" else "s"} to your phone's storage?",
+                color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text("They are still in Codriod's private storage. New projects already go to Internal storage/Codriod.",
+                color = Color(0xFFB9D7F2), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+            Button(onClick = { model.moveProjectsToStorage() }, enabled = !model.busy, modifier = Modifier.padding(top = 10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("Move to Internal storage/Codriod") }
         }
     }
 }
@@ -132,6 +178,7 @@ private fun HomeWithProjects(model: WorkspaceModel, onNew: () -> Unit, onOpenFol
                     if (query.isNotEmpty()) Text("✕", color = muted, modifier = Modifier.clickable { query = "" }.padding(4.dp))
                 }
             }
+            item { StorageBanner(model) }
             item {
                 Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ActionTile("New", ToolIcon.Plus, SolidColor(Blue), Modifier.weight(1f), onNew)
@@ -172,7 +219,8 @@ private fun HomeWithProjects(model: WorkspaceModel, onNew: () -> Unit, onOpenFol
         AlertDialog(onDismissRequest = { delete = null },
             title = { Text("Delete “${p.name}”?") },
             text = { Text(if (p.treeUri != null) "Codriod forgets this folder. The files on your phone are not deleted."
-                else "All files of this project are permanently deleted from this phone.") },
+                else "All files of this project are permanently deleted from this phone" +
+                    (p.path?.let { " (${StorageAccess.displayPath(java.io.File(it))})" } ?: "") + ".") },
             confirmButton = { TextButton(onClick = { delete = null; model.deleteProject(p) }) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
             dismissButton = { TextButton(onClick = { delete = null }) { Text("Cancel") } })
     }
@@ -279,6 +327,7 @@ private fun ProjectRow(project: Project, onClick: () -> Unit, onRename: () -> Un
 private fun FirstRun(model: WorkspaceModel, onNew: (String?) -> Unit, onOpenFolder: () -> Unit, onClone: () -> Unit, onOpenTerminal: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         TopBar(model, onOpenTerminal)
+        StorageBanner(model)
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 26.dp),
             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Spacer(Modifier.height(20.dp))

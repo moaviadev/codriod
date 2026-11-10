@@ -18,7 +18,18 @@ import dev.moavia.codriod.git.GitRemoteService
 import kotlinx.coroutines.*
 import java.io.File
 
-class EditorDocument(val path: String, initial: String) {
+/** Files the editor shows as pictures instead of text. */
+object ImageFiles {
+    private val raster = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "heic", "heif", "avif", "wbmp")
+    fun extension(path: String) = path.substringAfterLast('/').substringAfterLast('.', "").lowercase()
+    fun isImage(path: String) = extension(path) in raster || extension(path) == "svg"
+    fun isSvg(path: String) = extension(path) == "svg"
+}
+
+/** An open tab: text (editable) or an image ([image] = true; shown in the image viewer, never saved as text). */
+class EditorDocument(val path: String, initial: String, val image: Boolean = false) {
+    /** Bumped when an image file changed on disk, so the viewer reloads it. */
+    var revision by mutableIntStateOf(0)
     var value by mutableStateOf(TextFieldValue(initial))
     var savedText by mutableStateOf(initial)
     val dirty get() = value.text != savedText
@@ -27,7 +38,14 @@ class EditorDocument(val path: String, initial: String) {
 }
 
 class WorkspaceModel(application: Application) : AndroidViewModel(application) {
-    val store = ProjectStore(File(application.filesDir, "workspaces"), application)
+    val store = ProjectStore(File(application.filesDir, "workspaces"), application,
+        sharedAccess = { StorageAccess.granted(application) }, sharedHome = { StorageAccess.projectsHome() })
+    /** True when projects can live in Internal storage/Codriod (All files access / storage permission). */
+    var storageGranted by mutableStateOf(StorageAccess.granted(application))
+        private set
+    /** Older projects still in Codriod's private storage. */
+    var privateProjectCount by mutableIntStateOf(0)
+        private set
     private val prefs = application.getSharedPreferences("workspace", 0)
     var themeMode by mutableStateOf(prefs.getString("theme", "System") ?: "System")
         private set
@@ -103,7 +121,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
             ProjectAgentWorkspace(store, it.id, dev.moavia.codriod.agent.ShellRunner(env = CodriodCommands.env(context),
                 preamble = CodriodCommands.sourceLine(context)))
         }
-        override fun openFile() = activeDocument?.let { it.path to it.value.text }
+        override fun openFile() = activeDocument?.takeIf { !it.image }?.let { it.path to it.value.text }
         override suspend fun beforeAgentRun() = saveAll()
         override suspend fun afterAgentChangedFiles() = reloadFromDisk()
         override val gitBridge get() = gitAccountBridge
@@ -138,9 +156,9 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
             val current = project ?: return emptyList()
             val options = mutableListOf<dev.moavia.codriod.agent.ContextOption>()
             activeDocument?.let { doc ->
-                options += dev.moavia.codriod.agent.ContextOption("file", "📄", doc.path, "open in editor") { "File ${doc.path}:\n```\n${doc.value.text.take(60_000)}\n```" }
+                if (!doc.image) options += dev.moavia.codriod.agent.ContextOption("file", "📄", doc.path, "open in editor") { "File ${doc.path}:\n```\n${doc.value.text.take(60_000)}\n```" }
             }
-            documents.filter { it.path != activePath }.take(6).forEach { doc ->
+            documents.filter { it.path != activePath && !it.image }.take(6).forEach { doc ->
                 options += dev.moavia.codriod.agent.ContextOption("tab:${doc.path}", "📄", doc.path, "open tab") { "File ${doc.path}:\n```\n${doc.value.text.take(60_000)}\n```" }
             }
             entries.filter { it.directory && it.path.count { c -> c == '/' } == 0 }.take(8).forEach { dir ->
@@ -219,6 +237,23 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
             val last = prefs.getString("last_project", null)
             projects.firstOrNull { it.id == last }?.let { loadProject(it) }
         }
+    }
+
+    /** Called when the app comes back (e.g. from the All files access settings page). */
+    fun refreshStorage() {
+        storageGranted = StorageAccess.granted(getApplication())
+        viewModelScope.launch {
+            privateProjectCount = withContext(Dispatchers.IO) { runCatching { store.privateProjects().size }.getOrDefault(0) }
+            projects = withContext(Dispatchers.IO) { store.projects() }
+        }
+    }
+
+    /** Moves older private projects to Internal storage/Codriod so other apps and file managers can see them. */
+    fun moveProjectsToStorage() = task {
+        val moved = withContext(Dispatchers.IO) { store.privateProjects().map { store.moveToShared(it) } }
+        projects = withContext(Dispatchers.IO) { store.projects() }
+        privateProjectCount = 0
+        message = "Moved ${moved.size} project${if (moved.size == 1) "" else "s"} to ${StorageAccess.displayPath(StorageAccess.projectsHome())}"
     }
 
     private fun task(block: suspend () -> Unit) {
@@ -380,7 +415,8 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         var doc = documents.firstOrNull { it.path == path }
         if (doc == null) {
             require(documents.size < 12) { "Close a tab before opening another (12 tab limit)" }
-            doc = EditorDocument(path, withContext(Dispatchers.IO) { store.read(current.id, path) })
+            doc = if (ImageFiles.isImage(path)) EditorDocument(path, "", image = true)
+                else EditorDocument(path, withContext(Dispatchers.IO) { store.read(current.id, path) })
             documents.add(doc)
         }
         activePath = path
@@ -389,6 +425,34 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
             doc.value = doc.value.copy(selection = TextRange(offset.coerceAtMost(doc.value.text.length)))
         }
         persistTabs()
+    }
+
+    /** Image bytes for the image viewer. */
+    suspend fun imageBytes(path: String): ByteArray {
+        val current = project ?: error("No project")
+        return withContext(Dispatchers.IO) { store.readBytes(current.id, path) }
+    }
+
+    /** Opens an SVG (or any image) as text instead, to edit its code. */
+    fun openAsText(path: String) = task {
+        val current = project ?: return@task
+        val index = documents.indexOfFirst { it.path == path }
+        val text = withContext(Dispatchers.IO) { store.read(current.id, path) }
+        val doc = EditorDocument(path, text)
+        if (index >= 0) documents[index] = doc else documents.add(doc)
+        activePath = path
+    }
+
+    /** Sends an image from the project to Codriod AI as an attachment and opens the panel. */
+    fun askAgentAboutImage(path: String) = task {
+        val current = project ?: return@task
+        val file = store.fileOrNull(current.id, path) ?: withContext(Dispatchers.IO) {
+            File(getApplication<Application>().cacheDir, "agent-shots/" + path.substringAfterLast('/')).also {
+                it.parentFile?.mkdirs(); it.writeBytes(store.readBytes(current.id, path))
+            }
+        }
+        agent.attachedImages += file.absolutePath
+        agentPanelOpen = true
     }
 
     fun edit(doc: EditorDocument, value: TextFieldValue) {
@@ -509,7 +573,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         val selected = activePath
         for (doc in affected) {
             val path = new.trim() + doc.path.removePrefix(old)
-            val replacement = EditorDocument(path, doc.value.text).also { it.value = doc.value }
+            val replacement = EditorDocument(path, doc.value.text, doc.image).also { it.value = doc.value }
             documents[documents.indexOf(doc)] = replacement
             if (selected == doc.path) activePath = path
         }
@@ -533,7 +597,8 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     private suspend fun reloadFromDisk() {
         val current = project ?: return
         entries = withContext(Dispatchers.IO) { store.entries(current.id) }
-        for (doc in documents.filterNot { it.dirty }) {
+        documents.filter { it.image }.forEach { it.revision++ }
+        for (doc in documents.filterNot { it.dirty || it.image }) {
             val disk = withContext(Dispatchers.IO) { runCatching { store.read(current.id, doc.path) }.getOrNull() }
             if (disk != null && disk != doc.value.text) {
                 doc.value = TextFieldValue(disk)

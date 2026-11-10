@@ -142,17 +142,37 @@ private fun StatusCard(linux: LinuxEnvironment, selected: List<String>, onOpenTe
                 Text("Needs Wi-Fi or mobile data · keep Codriod open while it installs.", style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
             }
-            LinuxPhase.Installing -> {
-                linux.progress?.let { LinearProgressIndicator(progress = { it }, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) }
-                    ?: LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 10.dp))
-                if (linux.progressLabel.isNotBlank()) Text(linux.progressLabel, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
-                OutlinedButton(onClick = linux::cancel, modifier = Modifier.padding(top = 8.dp)) { Text("Stop") }
-            }
-            LinuxPhase.Ready -> Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            LinuxPhase.Installing -> InstallProgress(linux)
+            LinuxPhase.Ready -> if (linux.busy && linux.steps.isNotEmpty() && linux.checks.isEmpty() && !linux.checking) InstallProgress(linux)
+            else Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onOpenTerminal, shape = RoundedCornerShape(10.dp)) { Text("Open terminal") }
                 OutlinedButton(onClick = { linux.runChecks() }, enabled = !linux.busy, shape = RoundedCornerShape(10.dp)) { Text("Check health") }
             }
         }
+    }
+}
+
+/** Whole-install progress: percent, time left, time so far and the usual total, so nobody gives up half way. */
+@Composable
+private fun InstallProgress(linux: LinuxEnvironment) {
+    Column(Modifier.padding(top = 12.dp)) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text("${(linux.overall * 100).toInt()}%", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f).padding(bottom = 3.dp)) {
+                Text(linux.timeLeft.replaceFirstChar { it.uppercase() }, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                Text("Running ${linux.elapsed} · usually ${linux.usualTime}", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        LinearProgressIndicator(progress = { linux.overall }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(7.dp).clip(RoundedCornerShape(4.dp)))
+        if (linux.progressLabel.isNotBlank()) Text(linux.progressLabel, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 5.dp))
+        Row(Modifier.padding(top = 10.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)).padding(10.dp)) {
+            Text("ℹ", color = MaterialTheme.colorScheme.primary)
+            Text("  Keep going: it continues in the background if you switch apps, and the notification shows the time left. " +
+                "The first install downloads ~300 MB.", style = MaterialTheme.typography.labelSmall)
+        }
+        OutlinedButton(onClick = linux::cancel, modifier = Modifier.padding(top = 8.dp)) { Text("Stop") }
     }
 }
 
@@ -177,6 +197,11 @@ private fun StepsCard(linux: LinuxEnvironment, showLog: Boolean, onToggleLog: ()
                     if (step.detail.isNotBlank()) Text((if (step.status == StepStatus.Fixing) "🩺 " else "") + step.detail,
                         style = MaterialTheme.typography.labelSmall, maxLines = 2, overflow = TextOverflow.Ellipsis,
                         color = if (step.status == StepStatus.Failed) Red else if (step.status == StepStatus.Fixing) Amber else MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (step.status == StepStatus.Running || step.status == StepStatus.Fixing) Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        LinearProgressIndicator(progress = { step.progress }, modifier = Modifier.weight(1f).height(4.dp).clip(RoundedCornerShape(2.dp)),
+                            color = if (step.status == StepStatus.Fixing) Amber else MaterialTheme.colorScheme.primary)
+                        Text("  ${(step.progress * 100).toInt()}%", style = MaterialTheme.typography.labelSmall)
+                    }
                 }
             }
         }

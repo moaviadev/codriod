@@ -155,7 +155,7 @@ class LinuxCoreTest {
         assertNull(CliCatalog.parseVersion("command not found"))
         assertEquals(CliCatalog.all.size, CliCatalog.all.map { it.id }.toSet().size)
         assertTrue(CliCatalog.installScript(CliCatalog.byId("claude")!!).contains("npm install -g --no-fund --no-audit \"@anthropic-ai/claude-code@latest\""))
-        assertTrue(CliCatalog.installScript(CliCatalog.byId("gh")!!).contains("apt-get install -y --no-install-recommends gh"))
+        assertTrue(CliCatalog.installScript(CliCatalog.byId("gh")!!).contains("apt-get install -y --no-install-recommends -o APT::Status-Fd=1 gh"))
         assertTrue(CliCatalog.all.filter { it.kind == CliKind.Npm }.all { it.needsNode })
     }
 

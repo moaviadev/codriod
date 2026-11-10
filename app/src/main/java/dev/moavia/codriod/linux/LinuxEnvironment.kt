@@ -25,6 +25,8 @@ enum class StepStatus { Waiting, Running, Fixing, Done, Failed, Skipped }
 class LinuxStep(val id: String, val title: String) {
     var status by mutableStateOf(StepStatus.Waiting)
     var detail by mutableStateOf("")
+    /** 0..1 while running. */
+    var progress by mutableFloatStateOf(0f)
 }
 
 data class ExecResult(val code: Int, val output: String, val timedOut: Boolean = false)
@@ -72,6 +74,17 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
         private set
     var progressLabel by mutableStateOf("")
         private set
+    /** Whole install, 0..1, with the time left (e.g. "about 6 min left") and the usual total ("8–15 min"). */
+    var overall by mutableFloatStateOf(0f)
+        private set
+    var timeLeft by mutableStateOf("")
+        private set
+    var usualTime by mutableStateOf("")
+        private set
+    var elapsed by mutableStateOf("")
+        private set
+    private var estimator = InstallEstimator()
+    private var ticker: Job? = null
     /** Problem that Codriod Doctor could not fix, with the log tail, for the user or the AI agent. */
     var problem by mutableStateOf<String?>(null)
         private set
@@ -221,8 +234,36 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
 
     private fun step(id: String) = steps.firstOrNull { it.id == id }
 
-    private fun setStep(id: String, status: StepStatus, detail: String? = null) = ui {
-        step(id)?.let { it.status = status; if (detail != null) it.detail = detail }
+    private fun setStep(id: String, status: StepStatus, detail: String? = null) {
+        if (status == StepStatus.Skipped) estimator.skip(id)
+        ui { step(id)?.let { it.status = status; if (detail != null) it.detail = detail } }
+    }
+
+    /** Starts time-left estimates and the progress notification for the steps now in [steps]. */
+    private fun beginEstimate(title: String) {
+        estimator = InstallEstimator().apply { plan(steps.map { it.id }) }
+        usualTime = estimator.usualRange()
+        overall = 0f; timeLeft = "estimating time…"; elapsed = "0:00"
+        InstallNotification.start(app, title)
+        ticker?.cancel()
+        ticker = scope.launch(Dispatchers.Main) {
+            while (isActive) {
+                val left = estimator.secondsLeft()
+                overall = estimator.overall()
+                timeLeft = InstallEstimator.left(left)
+                elapsed = InstallEstimator.clock(estimator.elapsedTotalSeconds())
+                steps.firstOrNull { it.status == StepStatus.Running || it.status == StepStatus.Fixing }?.let { it.progress = estimator.stepFraction() }
+                val running = steps.firstOrNull { it.status == StepStatus.Running || it.status == StepStatus.Fixing }
+                InstallNotification.update(app, title, (running?.title ?: "Working") + " · " + timeLeft, (overall * 100).toInt())
+                delay(1000)
+            }
+        }
+    }
+
+    private fun endEstimate(success: Boolean, message: String) {
+        ticker?.cancel(); ticker = null
+        ui { if (success) { overall = 1f; timeLeft = "done" } }
+        InstallNotification.stop(app, if (success) "Done" else "Stopped", message)
     }
 
     /**
@@ -245,6 +286,8 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
         phase = LinuxPhase.Installing
         log.clear()
         runCatching { logFile.delete() }
+        beginEstimate("Installing Ubuntu" + if (wanted.isEmpty()) "" else " and ${wanted.size} CLI" + if (wanted.size > 1) "s" else "")
+        var success = false
         job = scope.launch(Dispatchers.IO) {
             try {
                 runStep("check") { checkPhone() }
@@ -269,6 +312,7 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
                 val failed = wanted.filter { cli ->
                     try { runStep("cli:${cli.id}") { installCliNow(cli) }; false } catch (_: StepFailure) { true }
                 }
+                success = failed.isEmpty()
                 if (failed.isEmpty()) { logLine("✓ Everything is installed."); ui { problem = null } }
                 else logLine("✗ Not installed: ${failed.joinToString { it.name }}. Tap Retry, or ask Codriod Agent to fix it.")
             } catch (error: CancellationException) {
@@ -278,6 +322,7 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
                 ui { phase = if (prefs.getBoolean("ready", false)) LinuxPhase.Ready else LinuxPhase.Broken }
             } finally {
                 ui { progress = null; progressLabel = "" }
+                endEstimate(success, if (success) "Ubuntu and your CLIs are ready" else problem ?: "Open Codriod to see what happened")
             }
         }
     }
@@ -287,10 +332,12 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
     private class StepFailure(message: String, val code: Int = 1) : Exception(message)
 
     private suspend fun <T> runStep(id: String, block: suspend () -> T): T {
+        estimator.start(id)
         setStep(id, StepStatus.Running)
         logLine("▶ ${step(id)?.title ?: id}")
         return try {
             val result = block()
+            estimator.finish(id)
             setStep(id, StepStatus.Done, (result as? String) ?: "")
             result
         } catch (error: CancellationException) { setStep(id, StepStatus.Failed, "stopped"); throw error }
@@ -318,7 +365,12 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
             attempt++
             val result = runScript(script) { line ->
                 if (line.startsWith("::step ")) setStep(id, if (attempt > 1) StepStatus.Fixing else StepStatus.Running, line.removePrefix("::step "))
-                logLine(line)
+                val parsed = InstallEstimator.parseLine(line)
+                if (parsed != null) {
+                    estimator.report(id, parsed.first)
+                    parsed.second?.let { msg -> setStep(id, if (attempt > 1) StepStatus.Fixing else StepStatus.Running, msg) }
+                }
+                if (!InstallEstimator.isProgressLine(line)) logLine(line)
             }
             if (result.code == 0) return result.output.lines().lastOrNull { it.startsWith("::step ") }?.removePrefix("::step ").orEmpty()
             val failLine = result.output.lines().lastOrNull { it.startsWith("::fail ") }?.removePrefix("::fail ")
@@ -410,6 +462,8 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
         val length = connection.getHeaderField("Content-Length")?.toLongOrNull() ?: 0L
         val total = (if (resumed) start else 0L) + length.coerceAtLeast(0)
         var done = if (resumed) start else 0L
+        val began = System.currentTimeMillis()
+        val beganBytes = done
         java.io.FileOutputStream(part, resumed).use { out ->
             connection.inputStream.use { input ->
                 val buffer = ByteArray(64 * 1024)
@@ -422,6 +476,9 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
                     if (now - lastUi > 200) {
                         lastUi = now
                         val fraction = if (total > 0) done.toFloat() / total else null
+                        val seconds = (now - began) / 1000.0
+                        if (seconds > 1.5) estimator.measuredSpeed((done - beganBytes) / seconds)
+                        fraction?.let { estimator.report("download", it) }
                         ui { progress = fraction; progressLabel = "$label · ${done / 1_048_576} / ${total / 1_048_576} MB" }
                     }
                 }
@@ -440,7 +497,10 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
         val size = archive.length().coerceAtLeast(1)
         val entries = FileInputStream(archive).use { raw ->
             val counting = CountingInputStream(raw.buffered(256 * 1024)) { n ->
-                if (n % (1 shl 20) < 65536) ui { progress = n.toFloat() / size; progressLabel = "Unpacking · ${100 * n / size}%" }
+                if (n % (1 shl 20) < 65536) {
+                    estimator.report("extract", n.toFloat() / size)
+                    ui { progress = n.toFloat() / size; progressLabel = "Unpacking · ${100 * n / size}%" }
+                }
             }
             TarExtractor.extract(GZIPInputStream(counting, 65536), fresh, AndroidFileOps)
         }
@@ -540,10 +600,12 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
         steps += LinuxStep("cli:$id", "Installing ${cli.name}")
         problem = null
         busyCli = id
+        beginEstimate("Installing ${cli.name}")
         job = scope.launch(Dispatchers.IO) {
-            try { runStep("cli:$id") { installCliNow(cli) } }
+            var ok = false
+            try { runStep("cli:$id") { installCliNow(cli) }; ok = true }
             catch (_: StepFailure) {} catch (_: CancellationException) {}
-            finally { ui { busyCli = null } }
+            finally { ui { busyCli = null }; endEstimate(ok, if (ok) "${cli.name} is ready" else "${cli.name} was not installed") }
         }
     }
 
@@ -554,9 +616,12 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
         steps.clear()
         steps += LinuxStep("node", "Installing Node.js 22")
         problem = null
+        beginEstimate("Installing Node.js 22")
         job = scope.launch(Dispatchers.IO) {
-            try { runStep("node") { scriptStep("node", LinuxScripts.node()); refreshNode(); "Node.js ${nodeVersion.orEmpty()}" } }
+            var ok = false
+            try { runStep("node") { scriptStep("node", LinuxScripts.node()); refreshNode(); "Node.js ${nodeVersion.orEmpty()}" }; ok = true }
             catch (_: StepFailure) {} catch (_: CancellationException) {}
+            finally { endEstimate(ok, if (ok) "Node.js ${nodeVersion.orEmpty()} is ready" else "Node.js was not installed") }
         }
     }
 
