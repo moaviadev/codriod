@@ -131,8 +131,8 @@ class GitAccountTools(private val bridge: GitAccountBridge, private val approver
                 require(action in listOf("fetch", "pull", "push")) { "action must be fetch, pull or push" }
                 if (action != "fetch" && approver.approve(ApprovalRequest.Action(
                         if (action == "push") "Push to origin" else "Pull from origin",
-                        if (action == "push") "Upload this branch's commits to the origin remote with your SSH key."
-                        else "Download and merge origin's changes into this branch.")) == Decision.Deny)
+                        if (action == "push") "Upload this branch's commits to the origin remote."
+                        else "Download and merge origin's changes into this branch.", risky = action == "push")) == Decision.Deny)
                     ToolOutcome("The user declined git $action.", "git $action declined")
                 else bridge.sync(action).let { ToolOutcome(it, "git $action: ${it.take(60)}", changedFiles = action == "pull") }
             }

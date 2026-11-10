@@ -44,6 +44,7 @@ class LocalShellBackend(private val context: Context) : TerminalExecutionBackend
             gradlew.setExecutable(true)
         }
 
+        dev.moavia.codriod.workspace.CodriodCommands.install(context)
         val shrc = File(baseDir, ".shrc")
         val coloredPrompt = "\u001b[1;32mcodriod@android\u001b[0m:\u001b[1;34m~/projects/Codriod\u001b[0m$ "
         shrc.writeText(
@@ -52,6 +53,7 @@ class LocalShellBackend(private val context: Context) : TerminalExecutionBackend
             alias ll='ls -la'
             alias la='ls -a'
             cd "$projectsDir" 2>/dev/null
+            ${dev.moavia.codriod.workspace.CodriodCommands.sourceLine(context)}
             """.trimIndent()
         )
 
@@ -67,7 +69,7 @@ class LocalShellBackend(private val context: Context) : TerminalExecutionBackend
             "PWD=$home",
             "ENV=${shrc.absolutePath}",
             "PS1=$coloredPrompt"
-        )
+        ) + dev.moavia.codriod.workspace.CodriodCommands.env(context).map { (k, v) -> "$k=$v" }
 
         return TerminalSession(
             "/system/bin/sh",

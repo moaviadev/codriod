@@ -64,12 +64,13 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
         pendingUpload = null
     }
     DisposableEffect(Unit) {
+        model.browser.hostContext = context
         model.browser.fileChooser = { callback ->
             pendingUpload?.onReceiveValue(null)
             pendingUpload = callback
             runCatching { uploadLauncher.launch("*/*") }.onFailure { callback.onReceiveValue(null); pendingUpload = null }
         }
-        onDispose { model.browser.fileChooser = null; model.browser.releaseViews() }
+        onDispose { model.browser.fileChooser = null; model.browser.hostContext = null; model.browser.releaseViews() }
     }
     var createDialog by remember { mutableStateOf(false) }
     var newEntry by remember { mutableStateOf<String?>(null) }
@@ -80,8 +81,9 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
         model.message?.let { snackbar.showSnackbar(it, withDismissAction = true); model.message = null }
     }
     BackHandler(model.project != null || model.previewOpen || model.terminalOpen || model.gitOpen ||
-        model.addonsOpen || model.agentOpen || model.githubOpen) {
+        model.addonsOpen || model.agentOpen || model.githubOpen || model.agentPanelOpen) {
         when {
+            model.agentPanelOpen -> if (model.agentSettingsOpen) model.agentSettingsOpen = false else model.agentPanelOpen = false
             model.githubOpen -> model.githubOpen = false
             model.agentOpen -> model.agentOpen = false
             model.addonsOpen -> model.addonsOpen = false
@@ -99,7 +101,9 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
             else -> model.goHome()
         }
     }
-    Scaffold(modifier = modifier, containerColor = MaterialTheme.colorScheme.background,
+    Box(modifier) {
+    AgentBrowserHost(model)
+    Scaffold(modifier = Modifier.fillMaxSize(), containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             if (model.project != null && !(model.previewOpen && model.browser.fullscreen)) WorkspaceNav(model,
@@ -113,7 +117,7 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
         Box(Modifier.fillMaxSize().padding(insets)) {
             when {
                 model.agentOpen -> dev.moavia.codriod.agent.AgentScreen(model.agent, model.project?.name,
-                    onBack = { model.agentOpen = false })
+                    onBack = { model.agentOpen = false }, onTakeOver = model::showAgentBrowser)
                 model.githubOpen -> GitHubScreen(model, onBack = { model.githubOpen = false })
                 model.project == null -> WorkspaceHome(
                     model = model,
@@ -128,9 +132,14 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
                     onOpenGit = model::showGitHub)
                 model.gitOpen -> GitPanel(model)
                 model.previewOpen -> WorkspacePreview(model)
-                else -> WorkspaceEditor(model)
+                else -> Box(Modifier.fillMaxSize()) {
+                    WorkspaceEditor(model)
+                    AgentEdgeHandle(model)
+                }
             }
         }
+    }
+    AgentPanelOverlay(model)
     }
     HostTrustDialog(model)
     if (createDialog) NewProjectDialog({ createDialog = false }) { name, template ->

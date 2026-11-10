@@ -48,6 +48,9 @@ class WorkspaceTerminalController(private val context: Context, val root: File) 
 
     fun detach() { view = null }
 
+    /** Everything the terminal printed (scroll-back included), for the agent's @ Terminal context. */
+    fun transcript(): String = runCatching { manager.session?.emulator?.screen?.transcriptText }.getOrNull().orEmpty()
+
     fun setTheme(darkTheme: Boolean) { dark = darkTheme; applyColors() }
 
     private fun applyColors() {

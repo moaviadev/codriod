@@ -79,18 +79,124 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     var addonsOpen by mutableStateOf(false)
     var agentOpen by mutableStateOf(false)
 
+    /** True while the agent side panel is open over the editor. */
+    var agentPanelOpen by mutableStateOf(false)
+    var agentPanelExpanded by mutableStateOf(false)
+    var agentSettingsOpen by mutableStateOf(false)
+
     private val agentHost = object : AgentHost {
         override fun currentProject() = project?.let { it.id to it.name }
-        override fun agentWorkspace(): AgentWorkspace? = project?.let { ProjectAgentWorkspace(store, it.id) }
+        override fun agentWorkspace(): AgentWorkspace? = project?.let {
+            val context = getApplication<Application>()
+            ProjectAgentWorkspace(store, it.id, dev.moavia.codriod.agent.ShellRunner(env = CodriodCommands.env(context),
+                preamble = CodriodCommands.sourceLine(context)))
+        }
         override fun openFile() = activeDocument?.let { it.path to it.value.text }
         override suspend fun beforeAgentRun() = saveAll()
         override suspend fun afterAgentChangedFiles() = reloadFromDisk()
         override val gitBridge get() = gitAccountBridge
+        override fun projectName(id: String) = projects.firstOrNull { it.id == id }?.name
+
+        override fun browserTools(vision: () -> Boolean, onScreenshot: (String) -> Unit) =
+            BrowserAgentTools(browser, { agent.browserEnabled }, vision, java.io.File(getApplication<Application>().cacheDir, "agent-shots"), onScreenshot)
+
+        override suspend fun browserScreenshot(): String? = withContext(Dispatchers.Main) {
+            val tab = browser.active?.takeIf { !it.isNewTab } ?: browser.tabs.firstOrNull { it.agent && !it.isNewTab } ?: return@withContext null
+            val bitmap = runCatching { browser.capture(tab) }.getOrNull() ?: return@withContext null
+            withContext(Dispatchers.IO) {
+                val file = java.io.File(getApplication<Application>().cacheDir, "agent-shots/attach-${System.currentTimeMillis()}.jpg")
+                file.parentFile?.mkdirs()
+                file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, it) }
+                file.absolutePath
+            }
+        }
+
+        override fun showAgentBrowser() {
+            browser.tabs.firstOrNull { it.agent }?.let { browser.select(it) }
+            agentPanelOpen = false
+            gitOpen = false; addonsOpen = false; agentOpen = false; githubOpen = false
+            previewOpen = true
+        }
+
+        override fun contextOptions(): List<dev.moavia.codriod.agent.ContextOption> {
+            val current = project ?: return emptyList()
+            val options = mutableListOf<dev.moavia.codriod.agent.ContextOption>()
+            activeDocument?.let { doc ->
+                options += dev.moavia.codriod.agent.ContextOption("file", "📄", doc.path, "open in editor") { "File ${doc.path}:\n```\n${doc.value.text.take(60_000)}\n```" }
+            }
+            documents.filter { it.path != activePath }.take(6).forEach { doc ->
+                options += dev.moavia.codriod.agent.ContextOption("tab:${doc.path}", "📄", doc.path, "open tab") { "File ${doc.path}:\n```\n${doc.value.text.take(60_000)}\n```" }
+            }
+            entries.filter { it.directory && it.path.count { c -> c == '/' } == 0 }.take(8).forEach { dir ->
+                val files = entries.filter { !it.directory && it.path.startsWith(dir.path + "/") }
+                options += dev.moavia.codriod.agent.ContextOption("dir:${dir.path}", "📁", dir.path + "/", "folder · ${files.size} files") {
+                    withContext(Dispatchers.IO) {
+                        "Folder ${dir.path}/:\n" + files.take(40).joinToString("\n\n") { f ->
+                            val text = runCatching { store.read(current.id, f.path) }.getOrNull()
+                            if (text == null) "${f.path} (binary)" else "${f.path}:\n```\n${text.take(8000)}\n```"
+                        }.take(80_000)
+                    }
+                }
+            }
+            browser.active?.takeIf { !it.isNewTab }?.let { tab ->
+                options += dev.moavia.codriod.agent.ContextOption("browser", "🌐", "Browser · ${tab.url.removePrefix("https://").removePrefix("http://").take(40)}",
+                    "page text, console and network") {
+                    val text = withContext(Dispatchers.Main) {
+                        kotlinx.coroutines.suspendCancellableCoroutine<String?> { cont ->
+                            val view = tab.view
+                            if (view == null) cont.resumeWith(Result.success(null)) else view.evaluateJavascript("document.body ? document.body.innerText.slice(0, 8000) : ''") { cont.resumeWith(Result.success(it)) }
+                        }
+                    }?.let { runCatching { org.json.JSONArray("[$it]").getString(0) }.getOrNull() }.orEmpty()
+                    val console = tab.console.takeLast(30).joinToString("\n") { "${it.level}: ${it.text.take(300)}" }
+                    "Browser page ${tab.url} (${tab.title}):\n$text\n\nConsole:\n${console.ifBlank { "(empty)" }}"
+                }
+            }
+            terminal?.let { term ->
+                options += dev.moavia.codriod.agent.ContextOption("terminal", "⌘", "Terminal output", "last 200 lines") {
+                    "Terminal output:\n```\n" + term.transcript().lines().takeLast(200).joinToString("\n") + "\n```"
+                }
+            }
+            if (gitSnapshot.initialized) options += dev.moavia.codriod.agent.ContextOption("git", "⑂", "Git changes", "${gitSnapshot.changedCount} files changed") {
+                withContext(Dispatchers.IO) {
+                    val root = store.root(current.id)
+                    val snap = gitService.snapshot(root)
+                    "Git branch ${snap.branch}. Staged: ${snap.staged}. Modified: ${snap.modified}. Untracked: ${snap.untracked}.\n" +
+                        (snap.staged + snap.modified).take(8).joinToString("\n\n") { p -> runCatching { gitService.diff(root, p, p in snap.staged) }.getOrDefault("") }.take(40_000)
+                }
+            }
+            return options
+        }
     }
-    /** Codriod Agent (Add-ons). Its chat is kept per project. */
-    val agent = AgentController(application, viewModelScope, agentHost)
+    /** Codriod Agent: the side panel in the editor and Add-ons. Its chats are kept per project. */
+    val agent: AgentController = AgentController(application, viewModelScope, agentHost)
 
     init {
+        CodriodCommands.install(application)
+        CodriodCommands.host = object : CodriodCommands.Host {
+            override fun browse(url: String) {
+                val tab = browser.newTab()
+                browser.navigate(tab, url)
+                agentPanelOpen = false; gitOpen = false; addonsOpen = false; agentOpen = false; githubOpen = false
+                previewOpen = true
+            }
+            override fun screenshot(file: java.io.File): String? {
+                val tab = browser.active?.takeIf { !it.isNewTab } ?: return "open a page in the browser first"
+                val bitmap = browser.capture(tab) ?: return "the browser is not ready"
+                file.parentFile?.mkdirs()
+                file.outputStream().use { bitmap.compress(if (file.name.endsWith(".jpg", true)) android.graphics.Bitmap.CompressFormat.JPEG
+                    else android.graphics.Bitmap.CompressFormat.PNG, 90, it) }
+                return null
+            }
+            override fun openInEditor(file: java.io.File): Boolean {
+                val current = project ?: return false
+                val root = runCatching { store.root(current.id).canonicalFile }.getOrNull() ?: return false
+                val canonical = file.canonicalFile
+                if (!canonical.path.startsWith(root.path + java.io.File.separator)) return false
+                openFile(canonical.relativeTo(root).path.replace(java.io.File.separatorChar, '/'))
+                terminalOpen = false; previewOpen = false
+                return true
+            }
+        }
         task {
             projects = withContext(Dispatchers.IO) { store.projects() }
             refreshContinue()
@@ -724,6 +830,9 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         gitAccount.trustPendingHost()
         message = "Server trusted. Try again."
     }
+
+    /** "Take over": shows the browser on the agent's tab. */
+    fun showAgentBrowser() = agentHost.showAgentBrowser()
 
     /** For the coding agent. Every call acts with the user's own token; it never leaves the Git layer. */
     val gitAccountBridge = object : GitAccountBridge {

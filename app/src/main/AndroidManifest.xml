@@ -3,6 +3,9 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <!-- Git clone, fetch, pull and push, and Codriod Agent's AI providers. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- codriod notify / vibrate commands. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
         android:allowBackup="true"
@@ -24,6 +27,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+        </provider>
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -25,7 +25,7 @@ class AgentEngineTest {
     private class ScriptedBackend(private val replies: List<LlmReply>) : ChatBackend {
         val seen = mutableListOf<List<ChatMessage>>()
         var specs: List<ToolSpec> = emptyList()
-        override suspend fun chat(system: String, messages: List<ChatMessage>, tools: List<ToolSpec>): LlmReply {
+        override suspend fun chat(system: String, messages: List<ChatMessage>, tools: List<ToolSpec>, onText: ((String) -> Unit)?): LlmReply {
             seen += messages.toList(); specs = tools
             return replies[seen.size - 1]
         }
@@ -37,8 +37,8 @@ class AgentEngineTest {
         override suspend fun approve(request: ApprovalRequest): Decision { asked += request; return queue.removeFirst() }
     }
 
-    private fun tools(ws: AgentWorkspace, approver: Approver, always: BooleanArray = booleanArrayOf(false)) =
-        AgentTools(ws, approver, { false }, { always[0] }, { always[0] = true })
+    /** Approves commands like the controller does with "Run all commands": everything except dangerous ones asks. */
+    private fun tools(ws: AgentWorkspace, approver: Approver, recorder: ChangeRecorder? = null) = AgentTools(ws, approver, emptyList(), recorder)
 
     @Test fun agentReadsEditsWithApprovalAndAnswers() = runBlocking {
         val (store, id) = project()
@@ -85,20 +85,21 @@ class AgentEngineTest {
         assertFalse(ask.specs.any { it.name == "delete_file" })
     }
 
-    @Test fun commandsNeedPermissionAndAlwaysIsRemembered() = runBlocking {
+    @Test fun commandsAskWithSafetyFlagsAndRun() = runBlocking {
         assumeTrue("needs a POSIX shell", java.io.File("/bin/sh").canExecute())
         val (store, id) = project()
         val ws = ProjectAgentWorkspace(store, id, ShellRunner("/bin/sh"))
-        val always = booleanArrayOf(false)
-        val approvals = Approvals(Decision.AlwaysAllow)
+        val approvals = Approvals(Decision.AlwaysAllow, Decision.Allow)
         val backend = ScriptedBackend(listOf(
             LlmReply("", listOf(ToolCall("c1", "run_command", """{"command":"echo hi > out.txt; cat out.txt"}"""))),
             LlmReply("", listOf(ToolCall("c2", "run_command", """{"command":"ls"}"""))),
             LlmReply("ok", emptyList())))
         val history = mutableListOf(ChatMessage(Role.User, "run"))
-        AgentEngine(backend, tools(ws, approvals, always)).run(history, "s", AgentMode.Agent, true, onChange = {})
-        assertEquals(1, approvals.asked.size)
-        assertTrue(always[0])
+        AgentEngine(backend, tools(ws, approvals)).run(history, "s", AgentMode.Agent, true, onChange = {})
+        assertEquals(2, approvals.asked.size)
+        val first = approvals.asked[0] as ApprovalRequest.Command
+        assertFalse(first.safe); assertFalse(first.dangerous)
+        assertTrue((approvals.asked[1] as ApprovalRequest.Command).safe)
         assertTrue(backend.seen[1].last().text.contains("exit code 0") && backend.seen[1].last().text.contains("hi"))
         assertTrue(backend.seen[2].last().text.contains("out.txt"))
         assertEquals("hi\n", store.read(id, "out.txt"))
@@ -114,12 +115,12 @@ class AgentEngineTest {
     @Test fun stepLimitAndEmptyAnswerBecomeErrors() = runBlocking {
         val (store, id) = project()
         val ws = ProjectAgentWorkspace(store, id, ShellRunner("/bin/sh"))
-        val loop = ChatBackend { _, _, _ -> LlmReply("", listOf(ToolCall("c", "list_files", "{}"))) }
+        val loop = ChatBackend { _, _, _, _ -> LlmReply("", listOf(ToolCall("c", "list_files", "{}"))) }
         val history = mutableListOf(ChatMessage(Role.User, "x"))
         AgentEngine(loop, tools(ws, Approvals()), maxSteps = 3).run(history, "s", AgentMode.Agent, true, onChange = {})
         assertEquals(Role.Error, history.last().role)
         val empty = mutableListOf(ChatMessage(Role.User, "x"))
-        AgentEngine({ _, _, _ -> LlmReply("", emptyList(), stopReason = "length") }, tools(ws, Approvals()))
+        AgentEngine({ _, _, _, _ -> LlmReply("", emptyList(), stopReason = "length") }, tools(ws, Approvals()))
             .run(empty, "s", AgentMode.Agent, true, onChange = {})
         assertTrue(empty.last().text.contains("length"))
     }

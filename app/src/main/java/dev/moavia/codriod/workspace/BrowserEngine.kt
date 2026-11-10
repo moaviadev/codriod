@@ -51,6 +51,8 @@ class BrowserTab(val id: Long, url: String) {
     val captured = mutableStateListOf<NetEntry>()
     internal var view: WebView? = null
     internal var appliedUa: String? = null
+    /** The tab the coding agent drives. */
+    var agent by mutableStateOf(false)
     val isNewTab get() = url.isBlank()
 }
 
@@ -189,6 +191,37 @@ class BrowserController(context: Context, private val files: () -> PreviewFiles?
     val history = mutableStateListOf<HistoryItem>()
     val bookmarks = mutableStateListOf<HistoryItem>()
     val shortcuts = mutableStateListOf<HistoryItem>()
+
+    /** The Activity, so the agent can create WebViews while the browser screen is closed. */
+    var hostContext: Context? = null
+
+    /** The tab the agent uses; created on demand so the user's own tabs are left alone. */
+    fun agentTab(): BrowserTab = tabs.firstOrNull { it.agent } ?: BrowserTab(nextId++, "").also { it.agent = true; it.title = "Agent"; tabs += it }
+
+    /** Makes sure [tab] has a WebView (needs the Activity). */
+    fun ensureView(tab: BrowserTab): WebView? = tab.view ?: hostContext?.let { webViewFor(tab, it) }
+
+    /** Navigates without the new-tab page shortcut handling. */
+    fun open(tab: BrowserTab, url: String) { tab.url = url; tab.console.clear(); tab.captured.clear(); tab.progress = 0; ensureView(tab)?.loadUrl(url) }
+
+    /** Draws what [tab] shows into a bitmap (lays the WebView out first if it is off screen). */
+    fun capture(tab: BrowserTab, maxWidth: Int = 1080): android.graphics.Bitmap? {
+        val view = ensureView(tab) ?: return null
+        val density = view.resources.displayMetrics.density
+        if (view.width <= 0 || view.height <= 0) {
+            val w = ((if (mode == DeviceMode.Mobile) 390 else mode.width) * density).toInt()
+            val h = ((if (mode == DeviceMode.Mobile) 844 else mode.height) * density).toInt()
+            view.measure(android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY),
+                android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY))
+            view.layout(0, 0, w, h)
+        }
+        val full = android.graphics.Bitmap.createBitmap(view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888)
+        view.draw(android.graphics.Canvas(full))
+        if (full.width <= maxWidth) return full
+        val scaled = android.graphics.Bitmap.createScaledBitmap(full, maxWidth, full.height * maxWidth / full.width, true)
+        full.recycle()
+        return scaled
+    }
 
     /** Set by the Activity so <input type=file> can open the system picker. */
     var fileChooser: ((ValueCallback<Array<Uri>>) -> Unit)? = null

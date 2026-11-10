@@ -37,7 +37,7 @@ class GitAccountToolsTest {
             override fun search(query: String) = emptyList<SearchMatch>()
             override fun run(command: String, timeoutSeconds: Int) = CommandResult(0, "", false)
         }
-        return AgentTools(workspace, approver, { false }, { false }, {}, listOf(GitAccountTools(bridge, approver)))
+        return AgentTools(workspace, approver, listOf(GitAccountTools(bridge, approver)))
     }
 
     @Test fun fullLoginFlowNeedsApprovalAndNeverReturnsSecrets() = runBlocking {

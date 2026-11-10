@@ -1,80 +1,98 @@
 # Codriod Agent
 
-Codriod Agent is the built-in AI chat and coding agent. It is the first row in
-**Add-ons** (bottom bar → Add-ons → Codriod Agent). It has three tabs:
+Codriod Agent is the built-in coding agent. You can open it in two ways:
 
-- **Chat:** one conversation per project, saved on the phone.
-- **Providers:** API keys, server URLs and model lists.
-- **Settings:** agent behaviour.
+- From the editor, tap or swipe the purple **AI** tab on the right edge. The agent
+  panel slides in over your code. Make it full screen with the expand button.
+- From **Add-ons → Codriod Agent**, where it opens full screen.
 
-## Bring your own keys
+## Modes
 
-Codriod ships with no API keys and has no account or server of its own. Each user
-enters their own key for each provider they use. Every provider row has a *Get key*
-link to that provider's own key page.
-
-- Keys are stored in this app's private storage on the phone (the `agent`
-  SharedPreferences, not encrypted, as decided for this app). They are excluded
-  from Android backups.
-- A key is only sent to the provider it belongs to.
-- *Fetch models* loads the live model list for your key from the provider's API.
-  Before that, a short suggested list is shown. Any model ID can also be typed
-  manually. OpenRouter models that cost nothing are marked **free**.
-
-## Providers
-
-| Group | Providers |
+| Mode | What it does |
 | --- | --- |
-| Free / free tier | Google Gemini, Groq, OpenRouter, Cerebras, Mistral, GitHub Models, Hugging Face, NVIDIA NIM, SambaNova, Cohere |
-| Pro (paid) | OpenAI, Anthropic Claude, DeepSeek, xAI Grok, Together AI, Fireworks AI, Perplexity |
-| Local & custom | Ollama, LM Studio (localhost), any OpenAI-compatible server (Custom) |
-
-Anthropic uses its native Messages API. All other providers use their
-OpenAI-compatible `/models` and `/chat/completions` endpoints (`agent/Providers.kt`).
-Perplexity has no tool calling, so it works in chat-only mode. Plain `http://` is
-allowed only for `localhost` and `127.0.0.1` (`res/xml/network_security_config.xml`);
-any other server needs HTTPS.
-
-## Modes and tools
-
-- **Ask:** the agent can only read: `list_files`, `read_file`, `search_files`, and
-  Git status/verify/test.
-- **Agent:** it can also use `write_file`, `edit_file`, `delete_file`,
-  `run_command`, and the Git actions.
-
-The project's file tree, the open file (if *Open file* is on), `AGENTS.md` or
-`CODRIOD.md`, and your custom instructions are sent as context.
+| Ask | Reads and searches the project and answers. Never changes anything. |
+| Plan | Investigates with read-only tools and writes a plan (`update_plan`). You get *Approve & build*, *Approve & run on Autopilot*, or *Edit plan*. |
+| Agent | Plans, edits files, runs commands, uses the browser and Git. Risky steps ask first. |
+| Autopilot | Works end to end without asking, with a higher step limit. Dangerous commands and Git push still ask. |
 
 ## Approvals
 
-- **File changes** show a line diff with *Apply* or *Reject*. *Settings → Apply file
-  changes without asking* turns this off.
-- **Deleting a file** always asks.
-- **Shell commands** run in the project folder with Android's `/system/bin/sh`,
-  with a 120-second limit and capped output. Each asks *Run once*, *Always
-  (project)* or *Deny*. Settings can reset the "always" choice.
-- **Git actions** (start GitHub login, configure, pull, push) always ask. See
-  [GitHub login](github-login.md). Git credentials are never given to the agent.
-
-*Stop* cancels the current request. *Max steps* (default 25) limits how many tool
-rounds one request can take.
-
-## Code map
-
-| File | Role |
+| Action | When it asks |
 | --- | --- |
-| `agent/Providers.kt` | Provider catalogue |
-| `agent/LlmClient.kt` | HTTP client, OpenAI and Anthropic wire formats, model list parsing |
-| `agent/AgentTools.kt`, `agent/GitAccountTools.kt` | Tools and approval requests |
-| `agent/AgentEngine.kt` | Agent loop, system prompt, chat JSON, shell runner |
-| `agent/AgentController.kt` | Settings, keys, chat state, project workspace adapter |
-| `agent/AgentScreens.kt` | Add-ons screen and the Agent's Chat, Providers and Settings tabs |
-| `agent/LineDiff.kt` | Diffs shown in approval cards |
+| File edits | Each edit shows a diff with *Apply* or *Reject*, unless *Apply edits automatically* is on, or the mode is Autopilot. |
+| Terminal commands | Depends on the policy: *Ask every time*; *Auto-run safe commands* (read-only commands such as `ls`, `cat`, `grep`, `find`, with no redirection or chaining); or *Run all commands*. *Always* on a command remembers the choice for that project. |
+| Dangerous commands | Always ask, even on Autopilot. Examples: `rm -r` on `/`, `~`, `*`, `.` or the sdcard (however the flags are written), `mkfs`, `dd of=/dev/…`, fork bombs, `reboot`, `su`, `chmod 777 /`, `pm uninstall`, `setprop`. The card turns red. |
+| Undo | After a run, a *N files changed* card lists the edits. *Undo all* restores every changed file and deletes the files the agent created. |
 
-## Not yet
+## Tools
 
-- Answers are not streamed. The full reply appears when the model finishes.
-- Images and file attachments are not supported.
-- There is no voice input.
-- Running Python, Node.js or Java needs the runtime add-ons that are listed as
-  *Coming soon*.
+| Group | Tools |
+| --- | --- |
+| Files | `list_files`, `read_file`, `search_files`, `view_image`, `write_file`, `edit_file` (with `replace_all`), `rename_file`, `delete_file` |
+| Terminal | `run_command`: the phone's `/system/bin/sh` with a timeout of up to 600 s. Codriod phone commands are available (see below). |
+| Plan | `update_plan`: a live to-do checklist shown in the chat |
+| Browser | `browser_open` (Mobile/Tablet/PC), `browser_snapshot` (numbered elements), `browser_click`, `browser_type`, `browser_scroll`, `browser_back`, `browser_eval`, `browser_console`, `browser_network`, `browser_screenshot`. The agent uses its own *Agent* tab. A live card shows its screenshots; *Take over* opens that tab for you. |
+| Web | `fetch_url` reads pages and docs as text |
+| Git | `git_account_status`, `github_login_start`, `github_login_verify`, `git_configure`, `git_test_access`, `git_sync` |
+
+## Images and context
+
+- **＋** attaches a photo from the camera or gallery, a screenshot of Codriod's
+  browser, or a file. Images are scaled down to 1600 px.
+- Images are sent only to models that can see them (👁 in the model list).
+- With **@ Context** you can attach open files, a folder, the browser page with its
+  console, the terminal output, or Git changes.
+- *Send the open file* adds the editor's file to every request.
+- `AGENTS.md` or `CODRIOD.md` in the project is followed as project rules.
+
+## Models
+
+- **Model switcher:** the chip at the top lists only providers you added keys for,
+  with search and filters for vision, tools and free. Recent models are listed
+  first.
+- **First run:** three steps. Pick a provider, paste the key (it is checked and the
+  models are fetched), then choose a default model and the permissions.
+- **Fast model** (optional, in Settings): names each chat.
+- **Streaming:** answers appear as they are written, for both OpenAI-style and
+  Anthropic providers. If a server rejects streaming, Codriod falls back to a normal
+  request.
+- **Long chats** are compacted automatically: old tool output is shortened, old
+  images are dropped, and the oldest turns go first, without breaking tool-call
+  pairs.
+
+## Chats
+
+Every project keeps several chats in `files/agent/chats/<project>/`. **History**
+lists them by project, with their mode, files changed and status. You can search
+them, open one, start a new chat or delete one.
+
+## Terminal phone commands
+
+Codriod adds shell functions to its terminal and to the agent's shell:
+
+| Command | What it does |
+| --- | --- |
+| `codriod open-url URL` | Open a link in another app |
+| `codriod browse URL` | Open a page in Codriod's browser |
+| `codriod open FILE\|URL` | Open a file in the editor or another app |
+| `codriod share FILE\|TEXT [--app whatsapp\|telegram\|gmail]` | Android share sheet |
+| `codriod clipboard get` / `codriod clipboard set [TEXT]` | Phone clipboard (`set` also reads stdin) |
+| `codriod notify [-t TITLE] TEXT` | Notification |
+| `codriod toast TEXT` | Short on-screen message |
+| `codriod vibrate [-d MS]` | Vibrate |
+| `codriod screenshot [FILE]` | Save a screenshot of the browser |
+| `codriod help` | List the commands |
+
+The Termux names work too: `termux-open-url`, `termux-share`,
+`termux-clipboard-get`/`-set`, `termux-toast`, `termux-notification`,
+`termux-vibrate`, `termux-open` and `xdg-open`.
+
+Android 10 and later do not let apps execute files from their data folder, so
+these are shell functions. They pass requests to the app through a private folder
+(`files/codriod/ipc`).
+
+## Not possible on Android
+
+The agent cannot control other apps. For example, it cannot place a WhatsApp call or
+take a screenshot of WhatsApp. To build a screen like another app's, attach a
+screenshot. The agent can open links and share files to other apps.
