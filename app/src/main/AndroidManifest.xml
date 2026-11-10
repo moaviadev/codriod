@@ -13,6 +13,9 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Voice chat and dictation with Codriod Agent (asked only when you tap the mic). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- codriod install / uninstall: apps you or an AI agent built (Android asks you to confirm each time). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
     <!-- Keeps Ubuntu / CLI installs running when you switch apps (progress in the notification). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -20,6 +23,11 @@
 
     <!-- Android 11+: find the phone's speech recognizer and text-to-speech engine. -->
     <queries>
+        <!-- codriod launch: start apps you installed. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
@@ -49,6 +57,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <receiver
+            android:name=".android.PackageStatusReceiver"
+            android:exported="false" />
         <service
             android:name=".linux.LinuxInstallService"
             android:exported="false"

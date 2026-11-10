@@ -1,5 +1,7 @@
 package dev.moavia.codriod.workspace
 
+import dev.moavia.codriod.android.ApkInstaller
+
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -38,7 +40,12 @@ object CodriodCommands {
         fun screenshot(file: File): String?
         /** Opens [file] in Codriod's editor if it belongs to the open project. */
         fun openInEditor(file: File): Boolean
+        /** Installs with adb when wireless debugging is connected (no dialog); null when it is not. */
+        fun installWithAdb(file: File): Pair<Int, String>? = null
     }
+
+    /** Commands that wait for the user (Android's install dialog) run on their own thread. */
+    val slowCommands = setOf("install", "uninstall")
 
     @Volatile var host: Host? = null
     private var started = false
@@ -68,13 +75,13 @@ object CodriodCommands {
     private fun loop(app: Context) {
         val ipc = ipcDir(app)
         while (true) {
-            runCatching { processPending(ipc) { cwd, args, stdin -> handle(app, cwd, args, stdin) } }
+            runCatching { processPending(ipc, slow = { it.firstOrNull() in slowCommands }) { cwd, args, stdin -> handle(app, cwd, args, stdin) } }
             Thread.sleep(80)
         }
     }
 
     /** Answers every waiting request in [ipc]. Kept free of Android types so it can be tested with a real shell. */
-    fun processPending(ipc: File, handler: (File, List<String>, String?) -> Pair<Int, String>) {
+    fun processPending(ipc: File, slow: (List<String>) -> Boolean = { false }, handler: (File, List<String>, String?) -> Pair<Int, String>) {
         val req = File(ipc, "req")
         req.listFiles { f -> f.name.endsWith(".req") }?.sortedBy { it.lastModified() }?.forEach { request ->
             val id = request.name.removeSuffix(".req")
@@ -84,11 +91,14 @@ object CodriodCommands {
             request.delete(); input.delete()
             val cwd = File(lines.firstOrNull().orEmpty().ifBlank { "/" })
             val args = lines.drop(1).map { it.replace('\u001e', '\n') }
-            val (code, out) = try { handler(cwd, args, stdin) } catch (error: Exception) { 1 to "codriod: ${error.message ?: error.javaClass.simpleName}" }
-            val res = File(ipc, "res").apply { mkdirs() }
-            File(res, "$id.out").writeText(if (out.isEmpty() || out.endsWith("\n")) out else out + "\n")
-            File(res, "$id.code").writeText(code.toString())
-            File(res, "$id.done").writeText("")
+            val work = {
+                val (code, out) = try { handler(cwd, args, stdin) } catch (error: Exception) { 1 to "codriod: ${error.message ?: error.javaClass.simpleName}" }
+                val res = File(ipc, "res").apply { mkdirs() }
+                File(res, "$id.out").writeText(if (out.isEmpty() || out.endsWith("\n")) out else out + "\n")
+                File(res, "$id.code").writeText(code.toString())
+                File(res, "$id.done").writeText("")
+            }
+            if (slow(args)) Thread(work, "codriod-$id").apply { isDaemon = true; start() } else work()
         }
         // Stale leftovers from a killed shell.
         req.listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > 120_000 }?.forEach { it.delete() }
@@ -152,6 +162,21 @@ object CodriodCommands {
                 val file = resolve(cwd, rest.firstOrNull() ?: "screenshot-${System.currentTimeMillis()}.png")
                 val error = onMain { h.screenshot(file) }
                 if (error == null) 0 to "✓ saved ${file.absolutePath}" else 1 to "codriod: $error"
+            }
+            "install" -> {
+                val target = rest.firstOrNull { !it.startsWith("-") }?.trim() ?: return 2 to "usage: codriod install APP.apk"
+                val file = resolve(cwd, target)
+                if (!file.isFile) return 2 to "codriod: $target: no such file"
+                if ("--dialog" !in rest) host?.installWithAdb(file)?.let { return it }
+                ApkInstaller.install(app, file)
+            }
+            "uninstall" -> {
+                val pkg = rest.firstOrNull()?.trim() ?: return 2 to "usage: codriod uninstall PACKAGE"
+                ApkInstaller.uninstall(app, pkg)
+            }
+            "launch", "start", "run" -> {
+                val pkg = rest.firstOrNull()?.trim() ?: return 2 to "usage: codriod launch PACKAGE"
+                onMain { ApkInstaller.launch(app, pkg) }
             }
             "help", "--help", "-h" -> 0 to HELP
             else -> 2 to "codriod: unknown command '$command'. Try: codriod help"
@@ -252,7 +277,12 @@ object CodriodCommands {
   codriod notify [-t TITLE] TEXT show a notification
   codriod toast TEXT             show a short message
   codriod vibrate [-d MS]        vibrate the phone
-  codriod screenshot [FILE.png]  save a screenshot of Codriod's browser"""
+  codriod screenshot [FILE.png]  save a screenshot of Codriod's browser
+  codriod install APP.apk        install an app you built (Android asks you to confirm;
+                                 silent when wireless debugging is connected)
+  codriod uninstall PACKAGE      uninstall an app (asks to confirm)
+  codriod launch PACKAGE         start an installed app
+In Ubuntu (Android SDK add-on): android-build [--install], android-logs PACKAGE, adb"""
 
     /** mksh-compatible functions. Only uses toybox commands that exist on every Android version. */
     fun rcScript(ipc: String): String = """
@@ -271,7 +301,7 @@ codriod() {
   while [ ! -f "${'$'}_cd_ipc/res/${'$'}_cd_id.done" ]; do
     sleep 0.1 2>/dev/null || sleep 1
     _cd_n=${'$'}((_cd_n + 1))
-    if [ ${'$'}_cd_n -gt 200 ]; then
+    if [ ${'$'}_cd_n -gt 200 ] && { [ "${'$'}1" != install ] && [ "${'$'}1" != uninstall ] || [ ${'$'}_cd_n -gt 6000 ]; }; then
       echo "codriod: the Codriod app did not answer; keep it open and try again" >&2
       rm -f "${'$'}_cd_ipc/req/${'$'}_cd_id.req" "${'$'}_cd_ipc/req/${'$'}_cd_id.in"
       return 1

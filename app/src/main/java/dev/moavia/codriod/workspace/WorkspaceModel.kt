@@ -232,6 +232,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
                 terminalOpen = false; previewOpen = false
                 return true
             }
+            override fun installWithAdb(file: java.io.File) = linux.installWithAdb(file)
         }
         task {
             projects = withContext(Dispatchers.IO) { store.projects() }
@@ -408,6 +409,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openFile(path: String, line: Int? = null) = task {
+        if (path.endsWith(".apk", true)) { installApk(path); fileSheet = false; return@task }
         openDocument(path, line)
         fileSheet = false
         searchSheet = false
@@ -428,6 +430,21 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
             doc.value = doc.value.copy(selection = TextRange(offset.coerceAtMost(doc.value.text.length)))
         }
         persistTabs()
+    }
+
+    /** Installs an APK from the project (Files → tap an .apk); Android asks to confirm unless wireless debugging is on. */
+    private fun installApk(path: String) {
+        val current = project ?: return
+        viewModelScope.launch {
+            message = "Installing ${path.substringAfterLast('/')}…"
+            val result = withContext(Dispatchers.IO) {
+                val file = store.fileOrNull(current.id, path) ?: java.io.File(getApplication<Application>().cacheDir, path.substringAfterLast('/')).also {
+                    it.writeBytes(store.readBytes(current.id, path, 300 * 1024 * 1024))
+                }
+                linux.installWithAdb(file) ?: dev.moavia.codriod.android.ApkInstaller.install(getApplication(), file)
+            }
+            message = result.second.removePrefix("codriod: ")
+        }
     }
 
     /** Image bytes for the image viewer. */

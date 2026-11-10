@@ -549,6 +549,121 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
             file.writeText(content)
             AndroidFileOps.chmod(file, if (guest in RootfsSetup.executables) 0x1ed else 0x1a4)
         }
+        writeAgentInstructions()
+    }
+
+    // ---- Android development: SDK, wireless debugging, installs ----------------------------------------------
+
+    var androidSdk by mutableStateOf(prefs.getString("android_sdk", null))
+        private set
+    var adbConnected by mutableStateOf(false)
+        private set
+    var adbStatus by mutableStateOf("Not connected")
+        private set
+    var adbBusy by mutableStateOf(false)
+        private set
+
+    /**
+     * Tells every coding agent (Codex, Copilot, Gemini, Claude Code, Qwen, opencode) about this phone: `codriod install`,
+     * `android-build`, `android-logs`, adb. Kept between markers so the user's own text in those files stays.
+     */
+    fun writeAgentInstructions() {
+        if (!File(rootfs, "usr").isDirectory) return
+        val block = AndroidDev.agentInstructions(androidSdk != null, adbConnected)
+        AndroidDev.instructionFiles.forEach { guest ->
+            runCatching {
+                val file = File(rootfs, guest.removePrefix("/"))
+                file.parentFile?.mkdirs()
+                file.writeText(AndroidDev.mergeInstructions(file.takeIf { it.isFile }?.readText(), block))
+            }
+        }
+    }
+
+    /** One tap: JDK 17, Android SDK (platform, build-tools, platform-tools), ARM aapt2 on phones, Gradle settings. */
+    fun installAndroidSdk() {
+        if (busy || !ready) return
+        steps.clear()
+        steps += LinuxStep("android-sdk", "Installing the Android SDK")
+        problem = null
+        beginEstimate("Installing the Android SDK")
+        job = scope.launch(Dispatchers.IO) {
+            var ok = false
+            try {
+                runStep("android-sdk") {
+                    scriptStep("android-sdk", AndroidDev.sdkScript())
+                    prefs.edit().putString("android_sdk", AndroidDev.PLATFORM).apply()
+                    ui { androidSdk = AndroidDev.PLATFORM }
+                    writeAgentInstructions()
+                    "${AndroidDev.PLATFORM} · build-tools ${AndroidDev.BUILD_TOOLS} · JDK 17"
+                }
+                ok = true
+            } catch (_: StepFailure) {} catch (_: CancellationException) {}
+            finally { endEstimate(ok, if (ok) "Android SDK is ready: android-build --install" else "The Android SDK was not installed") }
+        }
+    }
+
+    private suspend fun adb(vararg args: String, timeout: Long = 30): ExecResult =
+        exec(listOf("/bin/sh", "-c", "command -v adb >/dev/null || { echo 'adb is not installed: install the Android SDK first'; exit 127; }; adb " +
+            args.joinToString(" ") { "'" + it.replace("'", "'\\''") + "'" }), timeoutSeconds = timeout)
+
+    /** Wireless debugging step 2: pair with the code Android shows ("Pair device with pairing code"). */
+    fun adbPair(host: String, port: String, code: String) = adbAction("Pairing…") {
+        val r = adb("pair", "$host:$port", code)
+        if (r.output.contains("Successfully paired", true)) "Paired. Now connect." else throw IOException(r.output.trim().ifBlank { "Pairing failed" })
+    }
+
+    /** Wireless debugging step 3: connect (finds the port by itself when [port] is blank). */
+    fun adbConnect(host: String, port: String) = adbAction("Connecting…") {
+        var target = if (port.isNotBlank()) "$host:$port" else null
+        if (target == null) {
+            val services = adb("mdns", "services").output
+            target = Regex("_adb-tls-connect\\._tcp\\.?\\s+([0-9.]+:\\d+)").find(services)?.groupValues?.get(1)
+                ?: throw IOException("Could not find the port automatically. Type the port shown under “IP address & Port”.")
+        }
+        val r = adb("connect", target)
+        if (!r.output.contains("connected to", true) || r.output.contains("failed", true)) throw IOException(r.output.trim().ifBlank { "Connect failed" })
+        prefs.edit().putString("adb_target", target).apply()
+        "Connected ($target)"
+    }
+
+    /** Checks whether adb still has the phone (it drops when Wi-Fi changes or the phone restarts). */
+    fun adbRefresh() = adbAction("Checking…") {
+        val target = prefs.getString("adb_target", null)
+        if (target != null) adb("connect", target, timeout = 15)
+        val devices = adb("devices").output
+        if (devices.lines().none { it.trim().endsWith("device") && !it.startsWith("List") }) throw IOException("Not connected")
+        "Connected" + (target?.let { " ($it)" } ?: "")
+    }
+
+    private fun adbAction(working: String, block: suspend () -> String) {
+        if (adbBusy) return
+        adbBusy = true; adbStatus = working
+        scope.launch(Dispatchers.IO) {
+            try {
+                val message = block()
+                ui { adbStatus = message; adbConnected = message.startsWith("Connected") || adbConnected && !message.startsWith("Paired") }
+            } catch (error: Exception) {
+                ui { adbStatus = error.message ?: "Failed"; if (working != "Pairing…") adbConnected = false }
+            } finally {
+                ui { adbBusy = false }
+                writeAgentInstructions()
+            }
+        }
+    }
+
+    /** For `codriod install`: silent install over adb when wireless debugging is connected, else null (use Android's dialog). */
+    fun installWithAdb(apk: File): Pair<Int, String>? {
+        if (!adbConnected || !ready) return null
+        return runBlocking(Dispatchers.IO) {
+            val guest = shareIntoUbuntu(apk.absolutePath)
+            val r = adb("install", "-r", "-t", guest, timeout = 600)
+            File(rootfs, guest.removePrefix("/")).delete()
+            when {
+                r.output.contains("Success") -> 0 to "✓ installed ${apk.name} (wireless debugging)"
+                r.output.contains("no devices") || r.output.contains("device offline") || r.code == 127 -> { ui { adbConnected = false; adbStatus = "Disconnected" }; null }
+                else -> 1 to "codriod: adb install failed: ${r.output.trim().lines().lastOrNull { it.isNotBlank() } ?: r.output.take(300)}"
+            }
+        }
     }
 
     private suspend fun httpText(url: String): String = withContext(Dispatchers.IO) {
@@ -728,6 +843,7 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
 
     /** What the AI agent should know about this Linux, for its system prompt. */
     fun agentNotes(projectName: String?): String = if (!ready) "" else buildString {
+        append(AndroidDev.agentInstructions(androidSdk != null, adbConnected).substringAfter("\n\n"))
         appendLine("Linux: an Ubuntu 24.04 (${ubuntuArch}) environment runs on this phone with proot (no real root, no systemd, no Docker).")
         appendLine("Use the linux_run tool for Linux commands (apt-get, node, npm, python3, git, the AI CLIs). You are root there; do not use sudo.")
         if (projectName != null) appendLine("The open project is mounted at ${guestProjectPath(projectName)} (the same files as the editor); linux_run starts there.")

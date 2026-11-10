@@ -293,11 +293,13 @@ object RootfsSetup {
         "/usr/local/bin/termux-open" to "#!/bin/sh\nexec /usr/local/bin/codriod open \"\$@\"\n",
         "/usr/local/bin/termux-clipboard-get" to "#!/bin/sh\nexec /usr/local/bin/codriod clipboard get\n",
         "/usr/local/bin/termux-clipboard-set" to "#!/bin/sh\nexec /usr/local/bin/codriod clipboard set \"\$@\"\n",
-        "/usr/local/bin/termux-share" to "#!/bin/sh\nexec /usr/local/bin/codriod share \"\$@\"\n")
+        "/usr/local/bin/termux-share" to "#!/bin/sh\nexec /usr/local/bin/codriod share \"\$@\"\n",
+        "/usr/local/bin/android-build" to AndroidDev.BUILD_SCRIPT,
+        "/usr/local/bin/android-logs" to AndroidDev.LOGS_SCRIPT)
 
     val executables = setOf("/usr/local/bin/codriod", "/usr/local/bin/xdg-open", "/usr/local/bin/termux-open-url",
         "/usr/local/bin/termux-open", "/usr/local/bin/termux-clipboard-get", "/usr/local/bin/termux-clipboard-set",
-        "/usr/local/bin/termux-share")
+        "/usr/local/bin/termux-share", "/usr/local/bin/android-build", "/usr/local/bin/android-logs")
 
     /**
      * The `codriod` command inside Ubuntu: same file protocol as the phone shell's function, with the current
@@ -326,7 +328,8 @@ n=0
 while [ ! -f "${'$'}ipc/res/${'$'}id.done" ]; do
   sleep 0.1 2>/dev/null || sleep 1
   n=${'$'}((n + 1))
-  if [ ${'$'}n -gt 300 ]; then echo "codriod: the Codriod app did not answer; keep it open and try again" >&2; rm -f "${'$'}ipc/req/${'$'}id.req"; exit 1; fi
+  limit=300; case "${'$'}1" in install|uninstall) limit=6000 ;; esac
+  if [ ${'$'}n -gt ${'$'}limit ]; then echo "codriod: the Codriod app did not answer; keep it open and try again" >&2; rm -f "${'$'}ipc/req/${'$'}id.req"; exit 1; fi
 done
 cat "${'$'}ipc/res/${'$'}id.out" 2>/dev/null
 code=${'$'}(cat "${'$'}ipc/res/${'$'}id.code" 2>/dev/null)
@@ -516,4 +519,202 @@ object UbuntuBase {
         val m = Regex("^([0-9a-f]{64})\\s+\\*?(ubuntu-base-24\\.04(?:\\.(\\d+))?-base-$arch\\.tar\\.gz)$").find(line.trim()) ?: return@mapNotNull null
         Triple(m.groupValues[1], m.groupValues[2], m.groupValues[3].toIntOrNull() ?: 0)
     }.maxByOrNull { it.third }?.let { it.first to it.second }
+}
+
+// =====================================================================================================
+// Android development inside Ubuntu: SDK, Gradle builds, install and logs
+// =====================================================================================================
+
+object AndroidDev {
+    const val SDK = "/opt/android-sdk"
+    const val BUILD_TOOLS = "35.0.0"
+    const val PLATFORM = "android-35"
+    const val LICENSE_URL = "https://developer.android.com/studio/terms"
+    /** Community ARM64 builds of AOSP's build tools (aapt2, aidl, zipalign…): Google ships these only for x86_64 Linux. */
+    const val ARM_TOOLS_REPO = "lzhiyong/android-sdk-tools"
+
+    /** Installs JDK 17, the Android command-line tools, platform, build-tools and platform-tools (adb), with ARM tools on phones. */
+    fun sdkScript() = """
+set -e
+export DEBIAN_FRONTEND=noninteractive
+echo "::step Installing Java 17, unzip and adb"
+echo "::progress 2"
+apt-get install -y --no-install-recommends -o APT::Status-Fd=1 openjdk-17-jdk-headless unzip adb
+export ANDROID_HOME=$SDK
+mkdir -p ${'$'}ANDROID_HOME/cmdline-tools
+echo "::step Finding Google's Android command-line tools"
+echo "::progress 30"
+curl -fsSL --retry 4 https://dl.google.com/android/repository/repository2-3.xml -o /tmp/android-repo.xml
+cat > /tmp/android-find.py <<'PY'
+import re
+x = open('/tmp/android-repo.xml').read()
+best = None
+for m in re.finditer(r'<archive>(.*?)</archive>', x, re.S):
+    a = m.group(1)
+    u = re.search(r'<url>(commandlinetools-linux-(\d+)_latest\.zip)</url>', a)
+    c = re.search(r'<checksum[^>]*>([0-9a-f]{40})</checksum>', a)
+    if u and c and (best is None or int(u.group(2)) > best[0]):
+        best = (int(u.group(2)), u.group(1), c.group(1))
+if best: print(best[1], best[2])
+PY
+set -- ${'$'}(python3 /tmp/android-find.py)
+zip=${'$'}{1:-}; sha=${'$'}{2:-}
+[ -n "${'$'}zip" ] || { echo "::fail Could not find the Android command-line tools"; exit 4; }
+echo "::step Downloading ${'$'}zip"
+echo "::progress 33"
+curl -fL --retry 4 -o "/tmp/${'$'}zip" "https://dl.google.com/android/repository/${'$'}zip"
+echo "${'$'}sha  /tmp/${'$'}zip" | sha1sum -c -
+rm -rf /tmp/clt ${'$'}ANDROID_HOME/cmdline-tools/latest && unzip -q -o "/tmp/${'$'}zip" -d /tmp/clt
+mv /tmp/clt/cmdline-tools ${'$'}ANDROID_HOME/cmdline-tools/latest && rm -rf /tmp/clt "/tmp/${'$'}zip"
+export PATH=${'$'}ANDROID_HOME/cmdline-tools/latest/bin:${'$'}PATH
+echo "::step Accepting the Android SDK License you agreed to"
+echo "::progress 45"
+yes | sdkmanager --sdk_root=${'$'}ANDROID_HOME --licenses >/dev/null
+echo "::step Downloading the $PLATFORM platform and build tools"
+echo "::progress 50"
+sdkmanager --sdk_root=${'$'}ANDROID_HOME "platforms;$PLATFORM" "build-tools;$BUILD_TOOLS" "platform-tools"
+BT=${'$'}ANDROID_HOME/build-tools/$BUILD_TOOLS
+echo "::progress 85"
+case "${'$'}(uname -m)" in aarch64|arm64)
+  echo "::step Installing ARM build tools (aapt2, aidl, zipalign)"
+  url=${'$'}(curl -fsSL --retry 4 https://api.github.com/repos/$ARM_TOOLS_REPO/releases/latest 2>/dev/null | python3 -c 'import sys,json
+try: d=json.load(sys.stdin)
+except Exception: d={}
+a=[x["browser_download_url"] for x in d.get("assets",[]) if ("aarch64" in x["name"] or "arm64" in x["name"]) and x["name"].endswith((".zip",".tar.gz",".tar.xz",".tgz"))]
+a.sort(key=lambda u: ("static" not in u, u))
+print(a[0] if a else "")' || true)
+  [ -n "${'$'}url" ] || url="https://github.com/$ARM_TOOLS_REPO/releases/download/35.0.2/android-sdk-tools-static-aarch64.zip"
+  rm -rf /tmp/arm-tools && mkdir -p /tmp/arm-tools
+  if curl -fL --retry 4 -o /tmp/arm-tools.pkg "${'$'}url"; then
+    case "${'$'}url" in *.zip) unzip -q -o /tmp/arm-tools.pkg -d /tmp/arm-tools ;; *) tar -xf /tmp/arm-tools.pkg -C /tmp/arm-tools ;; esac
+  else
+    echo "ARM build tools not found online; using Ubuntu's aapt package (older)"
+    apt-get install -y --no-install-recommends aapt
+    mkdir -p /tmp/arm-tools/ubuntu
+    for t in aapt aapt2; do if command -v ${'$'}t >/dev/null; then cp "${'$'}(command -v ${'$'}t)" /tmp/arm-tools/ubuntu/; fi; done
+  fi
+  for t in aapt aapt2 aidl zipalign dexdump split-select; do
+    f=${'$'}(find /tmp/arm-tools -type f -name "${'$'}t" | head -n 1)
+    if [ -n "${'$'}f" ]; then install -m 755 "${'$'}f" "${'$'}BT/${'$'}t"; fi
+  done
+  rm -rf /tmp/arm-tools /tmp/arm-tools.pkg
+  ln -sf /usr/bin/adb ${'$'}ANDROID_HOME/platform-tools/adb
+  AAPT2_OVERRIDE="android.aapt2FromMavenOverride=${'$'}BT/aapt2"
+  ;;
+esac
+"${'$'}BT/aapt2" version
+echo "::step Configuring Gradle for the phone"
+echo "::progress 95"
+mkdir -p /root/.gradle
+cat > /root/.gradle/gradle.properties <<EOF3
+# Written by Codriod for building on a phone
+org.gradle.jvmargs=-Xmx1536m -XX:+UseParallelGC -Dfile.encoding=UTF-8
+org.gradle.workers.max=2
+org.gradle.caching=true
+org.gradle.parallel=false
+android.useAndroidX=true
+${'$'}{AAPT2_OVERRIDE:-}
+EOF3
+cat > /etc/profile.d/android.sh <<EOF4
+export ANDROID_HOME=$SDK ANDROID_SDK_ROOT=$SDK
+export JAVA_HOME=${'$'}(dirname ${'$'}(dirname ${'$'}(readlink -f ${'$'}(command -v javac))))
+export PATH=${'$'}ANDROID_HOME/cmdline-tools/latest/bin:${'$'}ANDROID_HOME/platform-tools:${'$'}BT:\${'$'}PATH
+EOF4
+echo "::step Android SDK ready ($PLATFORM, build-tools $BUILD_TOOLS)"
+""".trimStart()
+
+    /** `android-build [--install] [--release] [TASK]` in an Android project folder. */
+    val BUILD_SCRIPT = """
+#!/bin/bash
+# Codriod: builds the Android project in this folder with Gradle and can install it on this phone.
+#   android-build              debug APK (signed with the debug key, installable)
+#   android-build --install    build, then install with Android's dialog (or silently over wireless adb)
+#   android-build --release    release build
+#   android-build TASK         any Gradle task, e.g. test or lint
+set -e
+[ -f /etc/profile.d/android.sh ] && . /etc/profile.d/android.sh
+if [ -z "${'$'}ANDROID_HOME" ] || [ ! -d "${'$'}ANDROID_HOME/platforms" ]; then
+  echo "android-build: the Android SDK is not installed. In Codriod: Add-ons → Linux & AI CLIs → Android SDK." >&2; exit 3
+fi
+install=0; task=assembleDebug
+for a in "${'$'}@"; do case "${'$'}a" in --install) install=1 ;; --release) task=assembleRelease ;; *) task="${'$'}a" ;; esac; done
+if [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ]; then echo "android-build: run it in the project folder (settings.gradle not found)" >&2; exit 4; fi
+grep -qs '^sdk.dir=' local.properties || echo "sdk.dir=${'$'}ANDROID_HOME" >> local.properties
+start=${'$'}(date +%s)
+if [ -f ./gradlew ]; then sh ./gradlew "${'$'}task" --console=plain
+elif command -v gradle >/dev/null; then gradle "${'$'}task" --console=plain
+else echo "android-build: no gradlew in this project. Create one on a computer (gradle wrapper) or add the wrapper files." >&2; exit 5; fi
+apk=${'$'}(find . -path '*/build/outputs/apk/*' -name '*.apk' -newermt "@${'$'}start" 2>/dev/null | head -n 1)
+[ -z "${'$'}apk" ] && apk=${'$'}(find . -path '*/build/outputs/apk/*' -name '*.apk' 2>/dev/null | head -n 1)
+if [ -n "${'$'}apk" ]; then
+  echo "APK: ${'$'}apk"
+  if [ ${'$'}install = 1 ]; then codriod install "${'$'}apk"; fi
+fi
+""".trimStart()
+
+    /** `android-logs [PACKAGE]`: recent logcat (needs wireless debugging connected). */
+    val LOGS_SCRIPT = """
+#!/bin/bash
+# Codriod: recent Android logs, e.g. why an app crashed. Needs wireless debugging (Add-ons → Linux & AI CLIs).
+if ! adb get-state >/dev/null 2>&1; then
+  echo "android-logs: connect wireless debugging first (Add-ons → Linux & AI CLIs → Wireless debugging)" >&2; exit 3
+fi
+if [ -n "${'$'}1" ]; then
+  pid=${'$'}(adb shell pidof -s "${'$'}1" 2>/dev/null | tr -d '\r')
+  if [ -n "${'$'}pid" ]; then adb logcat -d -t 400 --pid="${'$'}pid"; else
+    echo "(${'$'}1 is not running; showing recent crashes)"; adb logcat -d -t 400 -b crash; adb logcat -d -t 200 AndroidRuntime:E '*:S'; fi
+else adb logcat -d -t 300 '*:W'; fi
+""".trimStart()
+
+    /** What every coding agent (Codex, Copilot, Gemini, Claude Code, Qwen, opencode, Codriod AI) should know. */
+    fun agentInstructions(sdkInstalled: Boolean, adbConnected: Boolean) = """
+# Codriod phone environment (written by Codriod)
+
+You are running inside Codriod on an Android phone: Ubuntu 24.04 under proot (no systemd, no Docker, you are root, no sudo).
+The project is at /root/projects/<name>; the user sees the same files in Codriod's editor.
+
+Phone commands (work here and in Codriod's terminal):
+- `codriod install path/to/app.apk`: install an APK on this phone. Android shows the user a confirmation, except when
+  wireless debugging is connected (silent). The command waits and prints the result: installed, cancelled, or why it failed.
+- `codriod uninstall com.example.app`, `codriod launch com.example.app` (start the app after installing).
+- `codriod open-url URL`, `codriod browse URL` (Codriod's browser), `codriod share FILE`, `codriod notify TEXT`, `codriod help`.
+
+Android apps:
+""".trimStart() + (if (sdkInstalled) """
+- The Android SDK is installed (${'$'}ANDROID_HOME=$SDK, $PLATFORM, build-tools $BUILD_TOOLS, JDK 17). Use compileSdk/targetSdk 35 or lower,
+  AGP 8.x, Kotlin, a Gradle wrapper (gradlew). Builds are slower than on a computer: keep dependencies small.
+- Build: `android-build` (debug APK) or `android-build --install` (build and install). Any task: `android-build test`.
+- On ARM, aapt2 comes from $ARM_TOOLS_REPO through android.aapt2FromMavenOverride in ~/.gradle/gradle.properties: do not remove it.
+- If Gradle runs out of memory, lower org.gradle.jvmargs in ~/.gradle/gradle.properties or add --no-daemon.
+""" else """
+- The Android SDK is NOT installed yet. Ask the user to install it in Codriod: Add-ons → Linux & AI CLIs → Android SDK.
+  Until then, build with GitHub Actions (gh CLI) and install the downloaded APK with `codriod install`.
+""") + (if (adbConnected) """
+- Wireless debugging is connected: `adb` works (install, shell, logcat). After installing, run the app with `codriod launch PKG`,
+  and if it crashes read `android-logs PKG`, fix the code and build again.
+""" else """
+- To read crash logs (`android-logs PKG`, `adb logcat`), the user must connect wireless debugging in Codriod
+  (Add-ons → Linux & AI CLIs → Wireless debugging). Without it you cannot read logs of other apps.
+""") + """
+Workflow for "build me an app": create the project (with gradlew), `android-build --install`, `codriod launch PKG`,
+check logs, fix, repeat. Tell the user to tap Install in Android's dialog when it appears.
+"""
+
+    /** Where each CLI reads global instructions, inside Ubuntu's /root. */
+    val instructionFiles = listOf(
+        "/root/.codex/AGENTS.md", "/root/.gemini/GEMINI.md", "/root/.claude/CLAUDE.md", "/root/.qwen/QWEN.md",
+        "/root/.copilot/copilot-instructions.md", "/root/.config/opencode/AGENTS.md", "/root/CODRIOD.md")
+
+    const val BEGIN = "<!-- codriod:begin -->"
+    const val END = "<!-- codriod:end -->"
+
+    /** Puts [block] between Codriod's markers, keeping anything the user wrote in the file. */
+    fun mergeInstructions(existing: String?, block: String): String {
+        val section = "$BEGIN\n${block.trimEnd()}\n$END\n"
+        if (existing.isNullOrBlank()) return section
+        val start = existing.indexOf(BEGIN)
+        val end = existing.indexOf(END)
+        return if (start >= 0 && end > start) existing.substring(0, start) + section + existing.substring(end + END.length).trimStart('\n')
+        else existing.trimEnd() + "\n\n" + section
+    }
 }

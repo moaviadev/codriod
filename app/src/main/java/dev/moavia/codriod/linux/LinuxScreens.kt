@@ -95,6 +95,9 @@ fun LinuxHubScreen(
                 }
             }
             if (linux.ready) {
+                item { Section("ANDROID APPS · build and install from this phone") }
+                item { AndroidSdkCard(linux) }
+                item { WirelessDebuggingCard(linux) }
                 item { Section("CODRIOD DOCTOR") }
                 item {
                     Card {
@@ -369,6 +372,96 @@ private fun DoctorCard(linux: LinuxEnvironment) {
                 Text(check.detail, style = MaterialTheme.typography.labelSmall, color = if (check.ok) MaterialTheme.colorScheme.onSurfaceVariant else Red,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
             }
+        }
+    }
+}
+
+/** JDK 17 + Android SDK + ARM build tools, with the license the user must accept. */
+@Composable
+private fun AndroidSdkCard(linux: LinuxEnvironment) {
+    var accepted by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(38.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF3DDC84)), contentAlignment = Alignment.Center) {
+                Text("A", color = Color(0xFF073042), fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            }
+            Column(Modifier.weight(1f).padding(start = 11.dp)) {
+                Text("Android SDK", fontWeight = FontWeight.SemiBold)
+                Text(linux.androidSdk?.let { "Installed · $it · build-tools ${AndroidDev.BUILD_TOOLS} · JDK 17" } ?: "Not installed · about 1.5 GB",
+                    style = MaterialTheme.typography.labelSmall, color = if (linux.androidSdk != null) Green else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Text("Build Android apps here with Gradle. On ARM phones Codriod adds ARM builds of aapt2 and the other build tools " +
+            "(Google ships them only for x86 computers; the ARM builds come from github.com/${AndroidDev.ARM_TOOLS_REPO}).",
+            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+        if (linux.androidSdk == null) {
+            Row(Modifier.padding(top = 8.dp).clickable { accepted = !accepted }, verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(accepted, { accepted = it })
+                Text("I accept the Android SDK License Agreement", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            }
+            Text("Read it ↗", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(start = 12.dp).clickable {
+                    runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(AndroidDev.LICENSE_URL))) }
+                })
+        }
+        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { linux.installAndroidSdk() }, enabled = !linux.busy && (accepted || linux.androidSdk != null), shape = RoundedCornerShape(10.dp)) {
+                Text(if (linux.androidSdk == null) "Install Android SDK" else "Reinstall")
+            }
+        }
+        if (linux.androidSdk != null) Text("In a project: android-build --install (build and install) · codriod install app.apk · " +
+            "or just ask Codex / Copilot / Codriod AI to build the app.", style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+    }
+}
+
+/** Wireless debugging: adb inside Ubuntu talks to this phone, for silent installs and crash logs. */
+@Composable
+private fun WirelessDebuggingCard(linux: LinuxEnvironment) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var host by remember { mutableStateOf("127.0.0.1") }
+    var pairPort by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    var port by remember { mutableStateOf("") }
+    var open by remember { mutableStateOf(false) }
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { open = !open }) {
+            Box(Modifier.size(38.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF2563EB)), contentAlignment = Alignment.Center) {
+                Text("📶", fontSize = 18.sp)
+            }
+            Column(Modifier.weight(1f).padding(start = 11.dp)) {
+                Text("Wireless debugging (adb)", fontWeight = FontWeight.SemiBold)
+                Text(linux.adbStatus, style = MaterialTheme.typography.labelSmall, color = if (linux.adbConnected) Green else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (linux.adbBusy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            else Text(if (open) "⌃" else "⌄", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text("Optional. Lets AI agents install without a dialog every time, and read crash logs (android-logs) so they can fix the app themselves.",
+            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+        if (open || !linux.adbConnected) {
+            if (linux.androidSdk == null) Text("Install the Android SDK first (it includes adb).", color = Amber, style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(top = 6.dp))
+            Text("1. Turn on Developer options (Settings → About phone → tap Build number 7 times), then Wireless debugging. Wi-Fi must be on.",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+            OutlinedButton(onClick = {
+                runCatching { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            }, modifier = Modifier.padding(top = 4.dp)) { Text("Open Developer options") }
+            Text("2. Tap “Pair device with pairing code” and type the port and the 6-digit code here (use split screen or a floating window).",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(pairPort, { pairPort = it.filter(Char::isDigit).take(5) }, label = { Text("Port") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("Code") }, singleLine = true, modifier = Modifier.weight(1f))
+                Button(onClick = { linux.adbPair(host, pairPort, code) }, enabled = pairPort.isNotBlank() && code.length == 6 && !linux.adbBusy) { Text("Pair") }
+            }
+            Text("3. Connect. Codriod finds the port by itself, or type the one under “IP address & Port”.",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(port, { port = it.filter(Char::isDigit).take(5) }, label = { Text("Port (optional)") }, singleLine = true, modifier = Modifier.weight(1f))
+                Button(onClick = { linux.adbConnect(host, port) }, enabled = !linux.adbBusy) { Text("Connect") }
+            }
+            TextButton(onClick = { linux.adbRefresh() }) { Text("Check connection") }
         }
     }
 }
