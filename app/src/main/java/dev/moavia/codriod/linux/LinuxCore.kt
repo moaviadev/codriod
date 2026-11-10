@@ -404,7 +404,7 @@ set -e
 export PATH=/opt/node/bin:${'$'}PATH
 command -v npm >/dev/null || { echo "node: not found"; exit 127; }
 echo "::step Installing $pkg"
-npm install -g --no-fund --no-audit "$pkg@latest"
+npm install -g --no-fund --no-audit ${pkg.split(' ').joinToString(" ") { "\"$it@latest\"" }}
 """.trimStart()
 
     fun npmRemove(pkg: String) = "export PATH=/opt/node/bin:\$PATH\nnpm uninstall -g \"$pkg\"\n"
@@ -437,32 +437,47 @@ data class CliSpec(
     val needsNode: Boolean = kind == CliKind.Npm,
     val docs: String = "",
     val experimental: Boolean = false,
-    val installScript: String? = null
+    val installScript: String? = null,
+    /** "codex" (app-server, full panel), "acp" (Agent Client Protocol panel) or null (terminal only). */
+    val protocol: String? = null,
+    /** Ways to start ACP mode, tried in order. */
+    val acpCommands: List<List<String>> = emptyList(),
+    /** Extra npm packages installed with the CLI (e.g. the ACP adapter). */
+    val extraPackages: List<String> = emptyList(),
+    /** Copilot: each prompt uses a premium request. */
+    val countsRequests: Boolean = false
 )
 
 object CliCatalog {
     val all = listOf(
         CliSpec("claude", "Claude Code", "Anthropic", "claude",
             "Anthropic's coding agent in the terminal.", "Claude Pro/Max account or Anthropic API key",
-            CliKind.Npm, "@anthropic-ai/claude-code", color = 0xFFD97757, docs = "https://docs.claude.com/en/docs/claude-code"),
+            CliKind.Npm, "@anthropic-ai/claude-code", loginCommand = "claude", color = 0xFFD97757, docs = "https://docs.claude.com/en/docs/claude-code",
+            protocol = "acp", acpCommands = listOf(listOf("claude-code-acp")), extraPackages = listOf("@zed-industries/claude-code-acp")),
         CliSpec("codex", "Codex CLI", "OpenAI", "codex",
             "OpenAI's coding agent.", "ChatGPT Plus/Pro account or OpenAI API key",
-            CliKind.Npm, "@openai/codex", loginCommand = "codex login", color = 0xFF10A37F, docs = "https://developers.openai.com/codex/cli"),
+            CliKind.Npm, "@openai/codex", loginCommand = "codex login", color = 0xFF10A37F, docs = "https://developers.openai.com/codex/cli",
+            protocol = "codex"),
         CliSpec("gemini", "Gemini CLI", "Google", "gemini",
             "Google's open-source agent with a free tier.", "Google account (free) or Gemini API key",
-            CliKind.Npm, "@google/gemini-cli", color = 0xFF4285F4, docs = "https://github.com/google-gemini/gemini-cli"),
+            CliKind.Npm, "@google/gemini-cli", loginCommand = "gemini", color = 0xFF4285F4, docs = "https://github.com/google-gemini/gemini-cli",
+            protocol = "acp", acpCommands = listOf(listOf("gemini", "--experimental-acp"), listOf("gemini", "--acp"))),
         CliSpec("copilot", "GitHub Copilot CLI", "GitHub", "copilot",
             "Copilot's coding agent in the terminal.", "GitHub account with Copilot",
-            CliKind.Npm, "@github/copilot", color = 0xFF24292F, docs = "https://docs.github.com/copilot"),
+            CliKind.Npm, "@github/copilot", loginCommand = "copilot login", color = 0xFF24292F, docs = "https://docs.github.com/copilot",
+            protocol = "acp", acpCommands = listOf(listOf("copilot", "--acp"), listOf("copilot", "--acp", "--stdio")), countsRequests = true),
         CliSpec("qwen", "Qwen Code", "Alibaba", "qwen",
             "Qwen's coding agent with a free sign-in.", "Qwen account (free) or API key",
-            CliKind.Npm, "@qwen-code/qwen-code", color = 0xFF615CED, docs = "https://github.com/QwenLM/qwen-code"),
+            CliKind.Npm, "@qwen-code/qwen-code", loginCommand = "qwen", color = 0xFF615CED, docs = "https://github.com/QwenLM/qwen-code",
+            protocol = "acp", acpCommands = listOf(listOf("qwen", "--experimental-acp"), listOf("qwen", "--acp"))),
         CliSpec("opencode", "opencode", "SST", "opencode",
             "Open-source agent for any provider.", "Your provider keys or accounts",
-            CliKind.Npm, "opencode-ai", loginCommand = "opencode auth login", color = 0xFF111827, docs = "https://opencode.ai/docs"),
+            CliKind.Npm, "opencode-ai", loginCommand = "opencode auth login", color = 0xFF111827, docs = "https://opencode.ai/docs",
+            protocol = "acp", acpCommands = listOf(listOf("opencode", "acp"))),
         CliSpec("kilo", "Kilo Code CLI", "Kilo", "kilocode",
             "Kilo Code's agent in the terminal.", "Kilo account or provider keys",
-            CliKind.Npm, "@kilocode/cli", color = 0xFFF8F675, docs = "https://kilocode.ai/docs", experimental = true),
+            CliKind.Npm, "@kilocode/cli", color = 0xFFF8F675, docs = "https://kilocode.ai/docs", experimental = true,
+            protocol = "acp", acpCommands = listOf(listOf("kilocode", "--acp"), listOf("kilocode", "acp"))),
         CliSpec("crush", "Crush", "Charm", "crush",
             "Glamorous terminal agent for many providers.", "Your provider keys",
             CliKind.Npm, "@charmland/crush", color = 0xFFFF5FD2, docs = "https://github.com/charmbracelet/crush", experimental = true),
@@ -477,7 +492,7 @@ object CliCatalog {
     fun byId(id: String) = all.firstOrNull { it.id == id }
 
     fun installScript(cli: CliSpec): String = cli.installScript ?: when (cli.kind) {
-        CliKind.Npm -> LinuxScripts.npmInstall(cli.packageName)
+        CliKind.Npm -> LinuxScripts.npmInstall((listOf(cli.packageName) + cli.extraPackages).joinToString(" "))
         CliKind.Apt -> LinuxScripts.apt(cli.packageName)
         CliKind.Script -> error("no script")
     }

@@ -7,6 +7,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -59,7 +60,8 @@ fun BoxScope.AgentEdgeHandle(model: WorkspaceModel) {
                 modifier = Modifier.padding(vertical = 2.dp).verticalText())
         }
         model.linux.pinned.mapNotNull { dev.moavia.codriod.linux.CliCatalog.byId(it) }.filter { it.id in model.linux.installed }.forEach { cli ->
-            EdgeTab(Brush.verticalGradient(listOf(Color(cli.color), Color(cli.color).copy(alpha = 0.75f))), onOpen = { model.openCli(cli.id) }) {
+            EdgeTab(Brush.verticalGradient(listOf(Color(cli.color), Color(cli.color).copy(alpha = 0.75f))), onOpen = { model.openCli(cli.id) },
+                onLongPress = { model.openCliTerminal(cli.id) }) {
                 Text("›", color = Color.White, fontSize = 10.sp)
                 Text(cli.name.substringBefore(' ').take(8), color = Color.White, fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold,
                     maxLines = 1, softWrap = false, modifier = Modifier.padding(vertical = 2.dp).verticalText())
@@ -69,12 +71,13 @@ fun BoxScope.AgentEdgeHandle(model: WorkspaceModel) {
 }
 
 @Composable
-private fun EdgeTab(brush: Brush, onOpen: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private fun EdgeTab(brush: Brush, onOpen: () -> Unit, onLongPress: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.width(22.dp)
         .shadow(8.dp, RoundedCornerShape(topStart = 11.dp, bottomStart = 11.dp))
         .clip(RoundedCornerShape(topStart = 11.dp, bottomStart = 11.dp))
         .background(brush)
-        .clickable(onClick = onOpen)
+        .combinedClickable(onLongClick = onLongPress, onClick = onOpen)
         .pointerInput(Unit) { detectHorizontalDragGestures { _, drag -> if (drag < -12) onOpen() } }
         .padding(vertical = 7.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center, content = content)
@@ -97,6 +100,29 @@ fun AgentPanelOverlay(model: WorkspaceModel) {
                 else AgentChat(model.agent, model.project?.name, onClose = { model.agentPanelOpen = false },
                     expanded = model.agentPanelExpanded, onToggleExpand = { model.agentPanelExpanded = !model.agentPanelExpanded },
                     onOpenSettings = { model.agentSettingsOpen = true }, onTakeOver = model::showAgentBrowser)
+            }
+        }
+    }
+}
+
+/** A CLI's chat panel (Codex, Copilot, Gemini…) sliding in from the right, like Codriod AI's panel. */
+@Composable
+fun CliPanelOverlay(model: WorkspaceModel) {
+    val panels = model.cliPanels
+    val open = panels.openId != null
+    AnimatedVisibility(open, enter = fadeIn(), exit = fadeOut()) {
+        Box(Modifier.fillMaxSize().background(Color(0x99000000)).clickable(remember { MutableInteractionSource() }, null) { panels.openId = null })
+    }
+    AnimatedVisibility(open, enter = slideInHorizontally { it }, exit = slideOutHorizontally { it }) {
+        val panel = panels.openId?.let { panels.panel(it) } ?: return@AnimatedVisibility
+        BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
+            val width = if (panels.expanded) maxWidth else minOf(maxWidth * 0.94f, 540.dp)
+            Box(Modifier.width(width).fillMaxHeight().background(AgentColors.Panel)
+                .clickable(remember { MutableInteractionSource() }, null) {}
+                .windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Top + WindowInsetsSides.Bottom))
+                .imePadding()) {
+                dev.moavia.codriod.cli.CliPanelView(panel, onClose = { panels.openId = null }, expanded = panels.expanded,
+                    onToggleExpand = { panels.expanded = !panels.expanded })
             }
         }
     }

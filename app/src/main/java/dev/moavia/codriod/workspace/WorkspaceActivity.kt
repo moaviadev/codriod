@@ -81,8 +81,9 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
         model.message?.let { snackbar.showSnackbar(it, withDismissAction = true); model.message = null }
     }
     BackHandler(model.project != null || model.previewOpen || model.terminalOpen || model.gitOpen ||
-        model.addonsOpen || model.agentOpen || model.githubOpen || model.agentPanelOpen || model.linuxOpen) {
+        model.addonsOpen || model.agentOpen || model.githubOpen || model.agentPanelOpen || model.linuxOpen || model.cliPanels.openId != null) {
         when {
+            model.cliPanels.openId != null -> model.cliPanels.openId = null
             model.linuxOpen -> model.linuxOpen = false
             model.agentPanelOpen -> if (model.agentSettingsOpen) model.agentSettingsOpen = false else model.agentPanelOpen = false
             model.githubOpen -> model.githubOpen = false
@@ -153,6 +154,7 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
         }
     }
     AgentPanelOverlay(model)
+    CliPanelOverlay(model)
     }
     HostTrustDialog(model)
     if (createDialog) NewProjectDialog({ createDialog = false }) { name, template ->

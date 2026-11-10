@@ -194,6 +194,23 @@ class LinuxEnvironment(context: Context, private val scope: CoroutineScope) {
         try { exec(listOf("/bin/bash", "/tmp/$name"), project, cwd, timeoutSeconds, onLine) } finally { file.delete() }
     }
 
+    /** Starts a long-running program inside Ubuntu with separate stdin/stdout/stderr (for CLI protocols). */
+    fun spawn(command: List<String>, project: Pair<File, String>? = null, cwd: String? = null): Process {
+        val spec = spec(project, cwd)
+        val builder = ProcessBuilder(spec.argv(command)).directory(base)
+        builder.environment().putAll(spec.hostEnv())
+        return builder.start()
+    }
+
+    /** Copies a phone file into Ubuntu's /tmp so CLIs can read it; returns the path inside Ubuntu. */
+    fun shareIntoUbuntu(hostPath: String): String {
+        val source = File(hostPath)
+        val dir = File(rootfs, "tmp/codriod-attach").apply { mkdirs() }
+        val target = File(dir, "${System.currentTimeMillis()}-${source.name}")
+        source.copyTo(target, overwrite = true)
+        return "/tmp/codriod-attach/${target.name}"
+    }
+
     /** Runs a command inside Ubuntu and collects its output (stdout and stderr together). */
     suspend fun exec(command: List<String>, project: Pair<File, String>? = null, cwd: String? = null, timeoutSeconds: Long = 600,
         onLine: (String) -> Unit = {}): ExecResult = withContext(Dispatchers.IO) {

@@ -90,6 +90,8 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         edgeOffset = (edgeOffset + delta).coerceIn(-320f, 320f)
         getApplication<Application>().getSharedPreferences("ui", android.content.Context.MODE_PRIVATE).edit().putFloat("edge_offset", edgeOffset).apply()
     }
+    /** Chat panels for the official CLIs (Codex, Copilot, Gemini…) of the open project. */
+    val cliPanels = dev.moavia.codriod.cli.CliPanels(application, viewModelScope, linux, { projectMount() }) { command -> openUbuntuTerminal(command) }
     private fun projectMount(): Pair<java.io.File, String>? = project?.let { p -> runCatching { store.root(p.id) to p.name }.getOrNull() }
     var searchResults by mutableStateOf<List<SearchHit>>(emptyList())
         private set
@@ -382,6 +384,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
 
     fun goHome() = task {
         saveAll()
+        cliPanels.stopAll()
         terminal?.close()
         terminal = null
         searchJob?.cancel()
@@ -633,12 +636,20 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         terminalOpen = true
     }
 
-    /** Opens the terminal in Ubuntu and starts an AI CLI (or its sign-in) in the project folder. */
+    /** Opens a CLI's chat panel (Codex, Copilot, Gemini…); CLIs without a chat mode open in the terminal. */
     fun openCli(id: String, login: Boolean = false) {
-        val cli = dev.moavia.codriod.linux.CliCatalog.byId(id) ?: return
         if (!linux.ready || id !in linux.installed) { linuxOpen = true; return }
         if (project == null) { message = "Open a project first"; return }
         agentPanelOpen = false
+        if (login || !cliPanels.hasPanel(id)) openCliTerminal(id, login) else cliPanels.open(id)
+    }
+
+    /** Runs a CLI (or its sign-in) in the Ubuntu terminal in the project folder. */
+    fun openCliTerminal(id: String, login: Boolean = false) {
+        val cli = dev.moavia.codriod.linux.CliCatalog.byId(id) ?: return
+        if (!linux.ready || id !in linux.installed) { linuxOpen = true; return }
+        if (project == null) { message = "Open a project first"; return }
+        agentPanelOpen = false; cliPanels.openId = null
         showTerminal()
         terminal?.useShell("ubuntu", if (login && cli.loginCommand != null) cli.loginCommand else cli.command)
     }
@@ -654,6 +665,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     /** Opens the terminal in Ubuntu (optionally typing [command]). */
     fun openUbuntuTerminal(command: String? = null) {
         if (project == null) { message = "Open a project first"; return }
+        cliPanels.openId = null
         showTerminal()
         terminal?.useShell("ubuntu", command)
     }
@@ -1008,6 +1020,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        cliPanels.stopAll()
         agent.stop()
         agent.releaseVoice()
         terminal?.close()

@@ -102,3 +102,55 @@ The agent knows the Ubuntu environment and has these tools:
   - the `codriod` and `xdg-open` commands
 - Node.js comes from nodejs.org (latest 22.x, SHA-256 checked). The CLIs come from npm (`npm install -g`).
 - Licenses: proot is GPL-2.0 (https://github.com/termux/proot) and talloc is LGPL-3.0.
+
+## CLI panels (chat UI for the official CLIs)
+
+Tapping a CLI's tab on the editor edge opens its **panel**, a chat UI like Codriod AI's, while the real CLI runs in
+Ubuntu. A **long press** on the tab opens the CLI in the terminal instead.
+
+### Codex (full panel)
+
+The panel talks to `codex app-server`, the protocol OpenAI's own IDE extension uses. It has:
+
+- **Sign in:**
+  - with ChatGPT (OpenAI's page opens in your browser)
+  - with a device code
+  - with an API key
+- **Account and limits:** your plan, and the **5-hour and weekly limits**. Each shows the percent used and when it
+  resets, live under the header. Tapping it shows the details.
+- **Tokens:** how many this chat used, and how much context is left. **Compact** frees context.
+- **Model and effort:** the model list comes from Codex, and **reasoning effort** offers the levels that model supports.
+- **Messages:** thinking, the plan, and every command with **live output** and exit code. Every file change shows as
+  a **diff**.
+- **Approvals:** Run / Always / Deny. You can also type or say yes / no.
+- **Chats:** open, fork and archive earlier chats. While Codex works, you can type to **steer** it.
+- **Review:** `/review` reviews uncommitted changes.
+- **Images:** you can attach images.
+
+### GitHub Copilot and the others (ACP)
+
+Copilot (`copilot --acp`), Gemini CLI, Qwen Code, opencode, Claude Code (through `claude-code-acp`) and Kilo use the
+Agent Client Protocol. The panel shows:
+
+- messages, thinking and tool calls
+- diffs and command output
+- the plan
+- the agent's modes and models, and effort where offered
+- slash commands
+- context used, and cost where reported
+- earlier sessions, if the CLI supports them
+
+For Copilot it also counts the **premium requests** used in the session (one per prompt) and links to your monthly
+usage on GitHub. Sign in uses the CLI's own login, either through the agent or in the terminal.
+
+### Permissions
+
+The CLIs' own sandboxes need Linux kernel features that proot doesn't have, so Codriod decides what runs:
+
+| Level | What happens |
+| --- | --- |
+| **Read only** | Every change and command waits for you. |
+| **Auto** | File edits inside the project and read-only commands (`ls`, `cat`, `grep`…) run by themselves. Everything else asks. |
+| **Full access / Autopilot** | Everything runs, except dangerous commands (`rm -rf /`, `mkfs`, …), which always ask. |
+
+A CLI without a chat mode (Crush, Amp, GitHub CLI) opens in the terminal.
