@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.sp
 import java.text.DateFormat
 import java.util.Date
 
-private enum class GitTab(val title: String) { Changes("Changes"), History("History"), Branches("Branches") }
+private enum class GitTab(val title: String) { Changes("Changes"), History("History"), Branches("Branches"), Remote("Remote") }
 
 @Composable
 fun GitPanel(model: WorkspaceModel) {
@@ -93,6 +93,7 @@ fun GitPanel(model: WorkspaceModel) {
                     GitTab.Changes -> GitChanges(model)
                     GitTab.History -> GitHistory(model.gitSnapshot.commits)
                     GitTab.Branches -> GitBranches(model, onCreate = { branchDialog = true })
+                    GitTab.Remote -> GitRemoteTab(model)
                 }
             }
             if (tab == GitTab.Changes) {

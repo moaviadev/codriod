@@ -34,6 +34,12 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    packaging {
+        resources {
+            excludes += setOf("META-INF/versions/9/OSGI-INF/MANIFEST.MF", "META-INF/DEPENDENCIES")
+        }
+    }
+
     kotlinOptions {
         jvmTarget = "17"
     }
@@ -42,6 +48,12 @@ android {
 dependencies {
     implementation(project(":terminal-view"))
     implementation("org.eclipse.jgit:org.eclipse.jgit:7.7.1.202607240634-r")
+    // Git over SSH with the user's own key. JGit's JSch transport, on the maintained JSch fork
+    // (rsa-sha2/ECDSA support, which GitHub requires); the unmaintained original is excluded.
+    implementation("org.eclipse.jgit:org.eclipse.jgit.ssh.jsch:7.7.1.202607240634-r") {
+        exclude(group = "com.jcraft", module = "jsch")
+    }
+    implementation("com.github.mwiede:jsch:2.27.3")
     implementation("androidx.documentfile:documentfile:1.0.1")
 
     implementation(platform("androidx.compose:compose-bom:2025.10.01"))
@@ -56,6 +68,9 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    testImplementation("org.eclipse.jgit:org.eclipse.jgit.junit.ssh:7.7.1.202607240634-r")
     androidTestImplementation("androidx.test:core:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")

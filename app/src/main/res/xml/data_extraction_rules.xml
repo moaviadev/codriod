@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SSH keys belong to this device and Android user only; never back them up or transfer them. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="git-identities/" />
+        <exclude domain="file" path="git-known-hosts" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="git-identities/" />
+        <exclude domain="file" path="git-known-hosts" />
+    </device-transfer>
+</data-extraction-rules>

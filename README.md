@@ -42,7 +42,10 @@ The APK is emitted at `app\build\outputs\apk\debug\app-debug.apk`.
 - `terminal-emulator`: vendored Termux terminal emulator and `/dev/ptmx` PTY JNI
 - `terminal-view`: vendored Termux Android terminal view
 - `ProjectGitService`: local Git operations using Eclipse JGit; it stores each
-  repository in the project's private workspace and does not handle remotes
+  repository in the project's private workspace
+- `git/`: user-owned Git remote access (`GitRemoteService`, `SshIdentityStore`,
+  `CodriodHostKeys`): clone, fetch, pull and push over SSH with a key the user
+  creates on the phone; see [GitHub login](docs/github-login.md)
 - `TerminalExecutionBackend`: separate execution abstraction; `LocalShellBackend`
   is implemented and `SshBackend` is intentionally unsupported
 - `SessionManager`: session creation, resize, input, termination, and cleanup
@@ -50,8 +53,10 @@ The APK is emitted at `app\build\outputs\apk\debug\app-debug.apk`.
 The workspace Git panel initializes a repository, reviews staged/unstaged changes,
 previews text diffs, stages and unstages files, records commits, lists history, and
 creates or checks out local branches. Branch checkout requires a clean working tree.
-GitHub authentication, push/pull, merge conflict resolution, and SSH transport are
-not implemented yet.
+Its Remote tab signs in to the user's own GitHub account with an SSH key, sets the
+origin remote, and fetches, pulls and pushes; Home can clone a repository. Codriod has
+no GitHub OAuth app and never asks for passwords or tokens. Merge conflict resolution
+is not implemented yet.
 
 The local shell is `/system/bin/sh` with a pseudo-terminal, not an embedded
 Linux distribution or Termux package bootstrap. Basic Android shell commands
@@ -109,6 +114,7 @@ Automated verification includes:
   stage/unstage, commit history, branch creation/checkout, diffs, and dirty-tree
   checkout protection.
 
-JGit repository operations also have a device instrumentation test. The Git UI
-has not yet had a separate hands-on interaction pass, and GitHub remotes are not
-implemented.
+JGit repository operations also have a device instrumentation test. JVM tests in
+`app/src/test/.../git` cover SSH keys, pinned GitHub host keys, and clone/push/pull
+over a real local SSH server. The Git UI has not yet had a separate hands-on
+interaction pass on a device.

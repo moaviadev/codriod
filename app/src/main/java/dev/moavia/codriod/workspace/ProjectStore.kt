@@ -157,6 +157,27 @@ ls -la
         return project
     }
 
+    /** Creates a project whose files come from [populate], e.g. a Git clone into the empty folder. */
+    @Synchronized
+    fun createFromClone(name: String, populate: (File) -> Unit): Project {
+        val title = name.trim()
+        require(title.isNotEmpty() && title.length <= 64 && title.none { it.isISOControl() }) {
+            "Use a project name between 1 and 64 characters"
+        }
+        val id = UUID.randomUUID().toString()
+        val folder = File(directory, id)
+        check(folder.mkdir()) { "Cannot create project" }
+        try {
+            populate(folder)
+            val project = Project(id, title, "Git", System.currentTimeMillis())
+            saveMetadata(project)
+            return project
+        } catch (error: Throwable) {
+            folder.deleteRecursively()
+            throw error
+        }
+    }
+
     @Synchronized
     fun touch(project: Project) = project.copy(modified = System.currentTimeMillis()).also(::saveMetadata)
 

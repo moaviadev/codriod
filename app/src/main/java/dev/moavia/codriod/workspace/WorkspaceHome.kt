@@ -23,6 +23,7 @@ fun WorkspaceHome(
     model: WorkspaceModel,
     onCreate: () -> Unit,
     onOpenFolder: () -> Unit,
+    onClone: () -> Unit,
     onOpenTerminal: () -> Unit
 ) {
     var query by remember { mutableStateOf("") }
@@ -103,6 +104,10 @@ fun WorkspaceHome(
                         Spacer(Modifier.width(8.dp)); Text("Open folder")
                     }
                 }
+                TextButton(onClick = onClone, contentPadding = PaddingValues(horizontal = 0.dp)) {
+                    ToolGlyph(ToolIcon.Git, MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp)); Text("Clone a Git repository")
+                }
             }
         } else {
             LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp)) {
@@ -153,9 +158,14 @@ fun WorkspaceHome(
                         ToolGlyph(ToolIcon.Folder, MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.width(6.dp)); Text("Open folder")
                     }
+                    OutlinedButton(onClick = onClone, modifier = Modifier.weight(0.8f).height(44.dp),
+                        contentPadding = PaddingValues(8.dp)) {
+                        ToolGlyph(ToolIcon.Git, MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(6.dp)); Text("Clone")
+                    }
                 }
                 Spacer(Modifier.height(5.dp))
-                Text("Create in private storage or open folders from device storage.",
+                Text("Create in private storage, open a device folder or clone a Git repository.",
                     modifier = Modifier.align(Alignment.CenterHorizontally),
                     color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
             }

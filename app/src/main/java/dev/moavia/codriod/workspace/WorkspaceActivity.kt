@@ -59,6 +59,7 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
         }
     }
     var createDialog by remember { mutableStateOf(false) }
+    var cloneDialog by remember { mutableStateOf(false) }
     var newEntry by remember { mutableStateOf<String?>(null) }
     var renameEntry by remember { mutableStateOf<ProjectEntry?>(null) }
     var deleteEntry by remember { mutableStateOf<ProjectEntry?>(null) }
@@ -91,6 +92,7 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
                     model = model,
                     onCreate = { createDialog = true },
                     onOpenFolder = { openFolderLauncher.launch(null) },
+                    onClone = { cloneDialog = true },
                     onOpenTerminal = onOpenOriginalTerminal
                 )
                 model.gitOpen -> GitPanel(model)
@@ -99,6 +101,8 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
             }
         }
     }
+    if (cloneDialog) CloneRepositoryDialog(model) { cloneDialog = false }
+    HostTrustDialog(model)
     if (createDialog) NewProjectDialog({ createDialog = false }) { name, template ->
         createDialog = false; model.createProject(name, template)
     }

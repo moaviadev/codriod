@@ -73,15 +73,20 @@ class ProjectGitService {
 
     fun initialize(root: File) {
         require(open(root) == null) { "Git is already initialized" }
-        Git.init().setDirectory(root).setInitialBranch("main").call().use { git ->
-            val exclude = File(git.repository.directory, "info/exclude")
-            check(exclude.parentFile?.isDirectory == true || exclude.parentFile?.mkdirs() == true) {
-                "Could not prepare Git's local exclude file"
-            }
-            val current = exclude.takeIf { it.isFile }?.readText().orEmpty()
-            if (".codriod-project.properties" !in current.lines()) {
-                exclude.appendText("\n# Codriod app metadata\n.codriod-project.properties\n")
-            }
+        Git.init().setDirectory(root).setInitialBranch("main").call().use { git -> excludeMetadata(git) }
+    }
+
+    /** Keeps Codriod's project metadata out of Git, for new and cloned repositories. */
+    fun ensureMetadataExcluded(root: File) = withGit(root) { git -> excludeMetadata(git) }
+
+    private fun excludeMetadata(git: Git) {
+        val exclude = File(git.repository.directory, "info/exclude")
+        check(exclude.parentFile?.isDirectory == true || exclude.parentFile?.mkdirs() == true) {
+            "Could not prepare Git's local exclude file"
+        }
+        val current = exclude.takeIf { it.isFile }?.readText().orEmpty()
+        if (".codriod-project.properties" !in current.lines()) {
+            exclude.appendText("\n# Codriod app metadata\n.codriod-project.properties\n")
         }
     }
 

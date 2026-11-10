@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SSH keys belong to this device and Android user only; never include them in backups. -->
+<full-backup-content>
+    <exclude domain="file" path="git-identities/" />
+    <exclude domain="file" path="git-known-hosts" />
+</full-backup-content>

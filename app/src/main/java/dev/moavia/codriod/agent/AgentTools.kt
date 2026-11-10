@@ -21,6 +21,15 @@ sealed class ApprovalRequest {
     data class Edit(val path: String, val created: Boolean, val diff: List<DiffLine>) : ApprovalRequest()
     data class Delete(val path: String) : ApprovalRequest()
     data class Command(val command: String) : ApprovalRequest()
+    /** A named action such as "Set up GitHub login" or "Push to origin". */
+    data class Action(val title: String, val detail: String) : ApprovalRequest()
+}
+
+/** A group of extra tools, for example Git account tools, plugged into [AgentTools]. */
+interface AgentToolset {
+    fun specs(mode: AgentMode): List<ToolSpec>
+    fun handles(name: String): Boolean
+    suspend fun execute(name: String, args: JSONObject, mode: AgentMode): ToolOutcome
 }
 
 enum class Decision { Allow, AlwaysAllow, Deny }
@@ -39,7 +48,8 @@ class AgentTools(
     private val approver: Approver,
     private val autoApplyEdits: () -> Boolean,
     private val commandsAlwaysAllowed: () -> Boolean,
-    private val onAlwaysAllowCommands: () -> Unit
+    private val onAlwaysAllowCommands: () -> Unit,
+    private val toolsets: List<AgentToolset> = emptyList()
 ) {
     companion object {
         private const val MAX_READ_CHARS = 60_000
@@ -80,8 +90,10 @@ class AgentTools(
                 schema(Triple("command", "string", "Shell command"), required = listOf("command")))
         )
 
-        fun specs(mode: AgentMode) = if (mode == AgentMode.Agent) readOnly + editing else readOnly
+        fun baseSpecs(mode: AgentMode) = if (mode == AgentMode.Agent) readOnly + editing else readOnly
     }
+
+    fun specs(mode: AgentMode): List<ToolSpec> = baseSpecs(mode) + toolsets.flatMap { it.specs(mode) }
 
     suspend fun execute(call: ToolCall, mode: AgentMode): ToolOutcome {
         val args = runCatching { JSONObject(call.arguments.ifBlank { "{}" }) }.getOrNull()
@@ -90,6 +102,7 @@ class AgentTools(
             return ToolOutcome("Error: ${call.name} is not available in Ask mode. Describe the change instead.",
                 "${call.name} blocked (Ask mode)")
         return try {
+            toolsets.firstOrNull { it.handles(call.name) }?.let { return it.execute(call.name, args, mode) }
             when (call.name) {
                 "list_files" -> {
                     val files = workspace.files()
