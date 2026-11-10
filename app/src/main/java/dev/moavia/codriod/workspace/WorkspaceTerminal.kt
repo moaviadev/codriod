@@ -26,7 +26,9 @@ import dev.moavia.codriod.SessionManager
 import java.io.File
 
 /** Reuses the terminal engine; workspace-specific commands and views live here. */
-class WorkspaceTerminalController(private val context: Context, val root: File) :
+class WorkspaceTerminalController(private val context: Context, val root: File,
+    /** Creates the Ubuntu backend when Linux is installed; null hides the switch. */
+    private val ubuntu: (() -> dev.moavia.codriod.TerminalExecutionBackend?)? = null) :
     TerminalSessionClient, TerminalViewClient {
     private val manager = SessionManager(context)
     private var view: TerminalView? = null
@@ -35,12 +37,20 @@ class WorkspaceTerminalController(private val context: Context, val root: File) 
     var ctrl by mutableStateOf(false)
     var status by mutableStateOf("Local shell")
         private set
+    /** "phone" (Android sh) or "ubuntu". */
+    var shell by mutableStateOf("phone")
+        private set
+    val ubuntuAvailable get() = ubuntu?.invoke() != null
     private var dark = true
 
     fun attach(terminal: TerminalView) {
         view = terminal
         try {
-            val session = manager.session ?: manager.create("Local", this, this)
+            val session = manager.session ?: run {
+                val backend = if (shell == "ubuntu") ubuntu?.invoke() else null
+                if (backend != null) { status = "Ubuntu · bash"; manager.createWith(backend, this, this) }
+                else { shell = "phone"; status = "Local shell"; manager.create("Local", this, this) }
+            }
             terminal.attachSession(session)
             applyColors()
         } catch (error: Exception) { status = "Terminal failed: " + error.message }
@@ -70,11 +80,25 @@ class WorkspaceTerminalController(private val context: Context, val root: File) 
     }
 
     fun key(bytes: ByteArray) { manager.write(bytes); ctrl = false }
+
+    /** Switches between the phone shell and Ubuntu; [command] is typed into the new shell. */
+    fun useShell(kind: String, command: String? = null) {
+        if (kind == shell && manager.session?.isRunning == true && initialized) {
+            command?.let { manager.writeText(it + "\n") }
+            return
+        }
+        manager.terminate()
+        initialized = false
+        pending.clear()
+        shell = if (kind == "ubuntu" && ubuntuAvailable) "ubuntu" else "phone"
+        command?.let { pending += it + "\n" }
+        view?.let(::attach)
+    }
     fun restart() {
         manager.terminate()
         initialized = false
         pending.clear()
-        status = "Local shell"
+        status = if (shell == "ubuntu") "Ubuntu · bash" else "Local shell"
         view?.let(::attach)
     }
     fun close() { manager.terminate(); pending.clear(); initialized = false; view = null }
@@ -96,7 +120,7 @@ class WorkspaceTerminalController(private val context: Context, val root: File) 
         applyColors()
         if (!initialized) {
             initialized = true
-            manager.writeText("cd " + shellQuote(root.absolutePath) + "\n")
+            if (shell != "ubuntu") manager.writeText("cd " + shellQuote(root.absolutePath) + "\n")
             pending.toList().forEach(manager::writeText)
             pending.clear()
         }
@@ -148,6 +172,7 @@ class WorkspaceTerminalController(private val context: Context, val root: File) 
     override fun logStackTrace(tag: String, e: Exception) { Log.e(tag, e.message, e) }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkspaceTerminal(controller: WorkspaceTerminalController, modifier: Modifier = Modifier) {
     val dark = LocalCodeColors.current.dark
@@ -156,6 +181,12 @@ fun WorkspaceTerminal(controller: WorkspaceTerminalController, modifier: Modifie
     Column(modifier.background(MaterialTheme.colorScheme.background)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 32.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(controller.status, Modifier.weight(1f).padding(8.dp), style = MaterialTheme.typography.bodySmall, maxLines = 1)
+            if (controller.ubuntuAvailable) Row(Modifier.padding(vertical = 4.dp)) {
+                listOf("phone" to "Phone", "ubuntu" to "Ubuntu").forEach { (id, label) ->
+                    FilterChip(selected = controller.shell == id, onClick = { controller.useShell(id) }, label = { Text(label, fontSize = 11.sp) },
+                        modifier = Modifier.padding(horizontal = 2.dp).height(28.dp))
+                }
+            }
             TextButton(onClick = controller::restart, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Restart") }
         }
         AndroidView(

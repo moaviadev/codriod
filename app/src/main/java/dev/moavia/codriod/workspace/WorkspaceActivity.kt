@@ -81,8 +81,9 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
         model.message?.let { snackbar.showSnackbar(it, withDismissAction = true); model.message = null }
     }
     BackHandler(model.project != null || model.previewOpen || model.terminalOpen || model.gitOpen ||
-        model.addonsOpen || model.agentOpen || model.githubOpen || model.agentPanelOpen) {
+        model.addonsOpen || model.agentOpen || model.githubOpen || model.agentPanelOpen || model.linuxOpen) {
         when {
+            model.linuxOpen -> model.linuxOpen = false
             model.agentPanelOpen -> if (model.agentSettingsOpen) model.agentSettingsOpen = false else model.agentPanelOpen = false
             model.githubOpen -> model.githubOpen = false
             model.agentOpen -> model.agentOpen = false
@@ -119,6 +120,11 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
                 model.agentOpen -> dev.moavia.codriod.agent.AgentScreen(model.agent, model.project?.name,
                     onBack = { model.agentOpen = false }, onTakeOver = model::showAgentBrowser)
                 model.githubOpen -> GitHubScreen(model, onBack = { model.githubOpen = false })
+                model.linuxOpen -> dev.moavia.codriod.linux.LinuxHubScreen(model.linux,
+                    onBack = { model.linuxOpen = false },
+                    onOpenCli = { id, login -> model.linuxOpen = false; model.addonsOpen = false; model.openCli(id, login) },
+                    onOpenTerminal = { model.linuxOpen = false; model.addonsOpen = false; model.openUbuntuTerminal() },
+                    onAskAgent = { text -> model.askAgent(text) })
                 model.project == null -> WorkspaceHome(
                     model = model,
                     onCreate = { createDialog = true },
@@ -129,7 +135,14 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
                 model.addonsOpen -> dev.moavia.codriod.agent.AddonsScreen(model.agent,
                     onBack = { model.addonsOpen = false },
                     onOpenAgent = { model.agentOpen = true },
-                    onOpenGit = model::showGitHub)
+                    onOpenGit = model::showGitHub,
+                    linuxStatus = when (model.linux.phase) {
+                        dev.moavia.codriod.linux.LinuxPhase.Ready -> "Ubuntu · ${model.linux.installed.size} CLIs"
+                        dev.moavia.codriod.linux.LinuxPhase.Installing -> "Installing…"
+                        dev.moavia.codriod.linux.LinuxPhase.Unsupported -> "Not available"
+                        else -> "Set up"
+                    },
+                    onOpenLinux = { model.linuxOpen = true })
                 model.gitOpen -> GitPanel(model)
                 model.previewOpen -> WorkspacePreview(model)
                 else -> Box(Modifier.fillMaxSize()) {

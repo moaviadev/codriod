@@ -41,6 +41,10 @@ interface AgentHost {
     fun showAgentBrowser() {}
     /** Name of a project, for the history list. */
     fun projectName(id: String): String? = null
+    /** Extra knowledge for the system prompt (e.g. the Ubuntu environment). */
+    fun environmentNotes(): String = ""
+    /** Extra tools (e.g. Linux) for one run. */
+    fun extraToolsets(approver: Approver): List<AgentToolset> = emptyList()
 }
 
 /** The project folder as seen by the agent; every path goes through [ProjectStore]'s safety checks. */
@@ -562,7 +566,7 @@ class AgentController(context: Context, private val scope: CoroutineScope, priva
                     GitAccountTools(host.gitBridge, approver),
                     PlanToolset { title, steps -> main.post { planTitle = title; plan.clear(); plan.addAll(steps) } },
                     WebToolset({ internetEnabled }),
-                    browserTools)
+                    browserTools) + host.extraToolsets(approver)
                 val tools = AgentTools(workspace, approver, toolsets, recorder)
                 val openFile = if (includeOpenFile) host.openFile() else null
                 val system = withContext(Dispatchers.IO) {
@@ -571,7 +575,8 @@ class AgentController(context: Context, private val scope: CoroutineScope, priva
                         if (name in files) runCatching { workspace.read(name) }.getOrNull() else null
                     }
                     AgentPrompt.system(projectName, files, openFile, rules, instructions, runMode, spec.supportsTools,
-                        browser = browserTools != null, internet = internetEnabled, vision = vision, extraContext = extraContext)
+                        browser = browserTools != null, internet = internetEnabled, vision = vision, extraContext = extraContext,
+                        environment = host.environmentNotes())
                 }
                 val onText: ((String) -> Unit)? = if (streamingEnabled) { piece -> main.post { streaming += piece } } else null
                 val backend = ChatBackend { s, m, t, cb -> client.chat(spec, apiKey, url, model, s, m, t, cb) }

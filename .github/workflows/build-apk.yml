@@ -23,6 +23,12 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "ndk;28.2.13676358" > /dev/null
 
+      - name: Bundle proot (Linux runtime for Ubuntu and the AI CLIs)
+        run: |
+          sudo apt-get install -y patchelf > /dev/null
+          bash scripts/fetch-proot.sh app/src/main/jniLibs
+          ls -la app/src/main/jniLibs/*/
+
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build debug APK

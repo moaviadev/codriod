@@ -37,6 +37,17 @@ class SessionManager(context: Context) {
         }
     }
 
+    /** Starts a session with a backend that is not in the fixed list (e.g. Ubuntu for one project). */
+    fun createWith(
+        backend: TerminalExecutionBackend,
+        viewClient: TerminalViewClient,
+        sessionClient: TerminalSessionClient
+    ): TerminalSession {
+        terminate()
+        activeBackend = backend
+        return backend.createSession(viewClient, sessionClient).also { session = it; lastError = null }
+    }
+
     fun resize(columns: Int, rows: Int, cellWidth: Int, cellHeight: Int) {
         session?.updateSize(columns, rows, cellWidth, cellHeight)
     }

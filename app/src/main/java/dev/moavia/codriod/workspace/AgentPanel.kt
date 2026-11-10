@@ -8,6 +8,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,7 +16,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -28,21 +34,50 @@ import dev.moavia.codriod.agent.AgentChat
 import dev.moavia.codriod.agent.AgentColors
 import dev.moavia.codriod.agent.AgentSettingsScreen
 
-/** The small purple AI tab on the editor's right edge. Tap or swipe left to open the agent. */
+/** Rotates content by -90° and swaps its measured width and height, for vertical tab labels. */
+private fun Modifier.verticalText() = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints.copy(minWidth = 0, minHeight = 0, maxWidth = Constraints.Infinity, maxHeight = Constraints.Infinity))
+    layout(placeable.height, placeable.width) {
+        placeable.place(-(placeable.width - placeable.height) / 2, (placeable.width - placeable.height) / 2)
+    }
+}.rotate(-90f)
+
+/**
+ * Tabs on the editor's right edge: Codriod (the agent) and every AI CLI the user pinned. Tap or swipe left to open;
+ * drag up or down to move them away from the code. They are narrow and slightly see-through so code stays readable.
+ */
 @Composable
 fun BoxScope.AgentEdgeHandle(model: WorkspaceModel) {
     val busy = model.agent.running
-    Column(Modifier.align(Alignment.CenterEnd).offset(y = (-40).dp).width(30.dp).height(92.dp)
-        .shadow(12.dp, RoundedCornerShape(topStart = 14.dp, bottomStart = 14.dp))
-        .clip(RoundedCornerShape(topStart = 14.dp, bottomStart = 14.dp))
-        .background(Brush.verticalGradient(listOf(Color(0xFF7C3AED), Color(0xFF2563EB))))
-        .clickable { model.agentPanelOpen = true }
-        .pointerInput(Unit) { detectHorizontalDragGestures { _, drag -> if (drag < -12) model.agentPanelOpen = true } },
-        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Text("‹", color = Color.White, fontSize = 15.sp)
-        Text("AI", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        Text(if (busy) "●" else "✦", color = if (busy) Color(0xFF4ADE80) else Color.White, fontSize = 11.sp)
+    val density = LocalDensity.current
+    Column(Modifier.align(Alignment.CenterEnd).offset(y = model.edgeOffset.dp).alpha(0.92f)
+        .pointerInput(Unit) { detectVerticalDragGestures { change, drag -> change.consume(); model.moveEdgeTabs(with(density) { drag.toDp().value }) } },
+        verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.End) {
+        EdgeTab(Brush.verticalGradient(listOf(Color(0xFF7C3AED), Color(0xFF2563EB))), onOpen = { model.agentPanelOpen = true }) {
+            Text(if (busy) "●" else "‹", color = if (busy) Color(0xFF4ADE80) else Color.White, fontSize = 11.sp)
+            Text("Codriod", color = Color.White, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false,
+                modifier = Modifier.padding(vertical = 2.dp).verticalText())
+        }
+        model.linux.pinned.mapNotNull { dev.moavia.codriod.linux.CliCatalog.byId(it) }.filter { it.id in model.linux.installed }.forEach { cli ->
+            EdgeTab(Brush.verticalGradient(listOf(Color(cli.color), Color(cli.color).copy(alpha = 0.75f))), onOpen = { model.openCli(cli.id) }) {
+                Text("›", color = Color.White, fontSize = 10.sp)
+                Text(cli.name.substringBefore(' ').take(8), color = Color.White, fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = 1, softWrap = false, modifier = Modifier.padding(vertical = 2.dp).verticalText())
+            }
+        }
     }
+}
+
+@Composable
+private fun EdgeTab(brush: Brush, onOpen: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.width(22.dp)
+        .shadow(8.dp, RoundedCornerShape(topStart = 11.dp, bottomStart = 11.dp))
+        .clip(RoundedCornerShape(topStart = 11.dp, bottomStart = 11.dp))
+        .background(brush)
+        .clickable(onClick = onOpen)
+        .pointerInput(Unit) { detectHorizontalDragGestures { _, drag -> if (drag < -12) onOpen() } }
+        .padding(vertical = 7.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center, content = content)
 }
 
 /** The agent panel that slides in from the right over the editor. */

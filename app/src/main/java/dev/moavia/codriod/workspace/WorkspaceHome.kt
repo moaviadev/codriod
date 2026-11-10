@@ -137,7 +137,7 @@ private fun HomeWithProjects(model: WorkspaceModel, onNew: () -> Unit, onOpenFol
                     ActionTile("New", ToolIcon.Plus, SolidColor(Blue), Modifier.weight(1f), onNew)
                     ActionTile("Open folder", ToolIcon.Folder, SolidColor(GreenTile), Modifier.weight(1f), onOpenFolder)
                     ActionTile("GitHub", ToolIcon.Git, SolidColor(Color(0xFF333333)), Modifier.weight(1f), onClone)
-                    ActionTile("AI Agent", ToolIcon.CodeBrackets, AgentBrush, Modifier.weight(1f)) { model.agentOpen = true }
+                    ActionTile("Codriod AI", ToolIcon.CodeBrackets, AgentBrush, Modifier.weight(1f)) { model.agentOpen = true }
                 }
             }
             model.continueInfo?.takeIf { query.isBlank() }?.let { info ->

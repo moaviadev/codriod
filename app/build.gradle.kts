@@ -35,6 +35,12 @@ android {
     }
 
     packaging {
+        // proot runs as a program, so it must be extracted onto disk (Android only lets apps execute files from
+        // their native library folder). Keep its symbols: stripping can break the loader.
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += setOf("**/libproot.so", "**/libproot-loader.so", "**/libproot-loader32.so", "**/libtalloc.so")
+        }
         resources {
             excludes += setOf("META-INF/versions/9/OSGI-INF/MANIFEST.MF", "META-INF/DEPENDENCIES")
         }

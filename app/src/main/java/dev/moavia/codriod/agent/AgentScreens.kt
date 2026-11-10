@@ -42,16 +42,17 @@ private data class AddonRow(val title: String, val subtitle: String, val status:
 
 /** Add-ons: one row per add-on. Codriod Agent is the first; more agents and runtimes will join the list. */
 @Composable
-fun AddonsScreen(agent: AgentController, onBack: () -> Unit, onOpenAgent: () -> Unit, onOpenGit: () -> Unit) {
+fun AddonsScreen(agent: AgentController, onBack: () -> Unit, onOpenAgent: () -> Unit, onOpenGit: () -> Unit,
+    linuxStatus: String = "Set up", onOpenLinux: (() -> Unit)? = null) {
     val code = LocalCodeColors.current
     val agentStatus = agent.provider?.let { p -> agent.modelId?.let { "${p.name} · $it" } } ?: "Set up"
     val rows = listOf(
-        AddonRow("Codriod Agent", "AI chat and coding agent · ${Providers.all.size} providers, free and pro", agentStatus, true, onOpenAgent),
+        AddonRow("Codriod AI", "AI chat and coding agent · ${Providers.all.size} providers, free and pro", agentStatus, true, onOpenAgent),
         AddonRow("GitHub", "Connect with your token, see all your repositories, clone, pull and push", "Built in", true, onOpenGit),
-        AddonRow("Python", "Python runtime and pip for this phone", null, false),
-        AddonRow("Node.js", "Node.js runtime and npm", null, false),
+        AddonRow("Linux & AI CLIs", "Ubuntu, Node.js, Python and official agents: Claude Code, Codex, Gemini, Copilot and more",
+            linuxStatus, onOpenLinux != null, onOpenLinux),
         AddonRow("Java & Kotlin", "JDK, Kotlin and Gradle tools", null, false),
-        AddonRow("More AI agents", "Other agent extensions with their own sign-in", null, false)
+        AddonRow("More extensions", "Language servers, debuggers and themes", null, false)
     )
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Row(Modifier.fillMaxWidth().height(52.dp).background(code.header).padding(horizontal = 8.dp),

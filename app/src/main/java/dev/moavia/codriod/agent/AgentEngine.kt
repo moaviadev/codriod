@@ -76,12 +76,13 @@ object ContextCompactor {
 object AgentPrompt {
     fun system(projectName: String, files: List<String>, activeFile: Pair<String, String>?, rules: String?,
         customInstructions: String, mode: AgentMode, toolsAvailable: Boolean, browser: Boolean = false, internet: Boolean = false,
-        vision: Boolean = false, extraContext: String = ""): String = buildString {
+        vision: Boolean = false, extraContext: String = "", environment: String = ""): String = buildString {
         appendLine("You are Codriod Agent, an expert software engineer working inside Codriod, an IDE on an Android phone.")
         appendLine("Project: \"$projectName\". All paths are relative to the project root.")
         appendLine("Environment: files live on the phone; the shell is Android's /system/bin/sh (toybox), not bash. " +
             "Python, Node.js and Java are not installed unless the user says so. Git works through the git_* tools. " +
             "The project is served at http://localhost:3000 in Codriod's browser with live reload.")
+        if (environment.isNotBlank()) append(environment.trimEnd()).append('\n')
         if (toolsAvailable) {
             appendLine(when (mode) {
                 AgentMode.Ask -> "Mode: Ask. You can read and search the project but must not change it. Show proposed code in fenced blocks and suggest Agent mode to apply it."

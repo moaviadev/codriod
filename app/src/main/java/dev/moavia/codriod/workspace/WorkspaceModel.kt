@@ -61,6 +61,18 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         private set
     var terminal by mutableStateOf<WorkspaceTerminalController?>(null)
         private set
+    /** Ubuntu (proot) with Node.js and the official AI CLIs. */
+    val linux = dev.moavia.codriod.linux.LinuxEnvironment(application, viewModelScope)
+    /** Add-ons → Linux & AI CLIs screen. */
+    var linuxOpen by mutableStateOf(false)
+    /** Vertical position of the editor-edge tabs (dp from the centre), dragged by the user. */
+    var edgeOffset by mutableFloatStateOf(application.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE).getFloat("edge_offset", -40f))
+        private set
+    fun moveEdgeTabs(delta: Float) {
+        edgeOffset = (edgeOffset + delta).coerceIn(-320f, 320f)
+        getApplication<Application>().getSharedPreferences("ui", android.content.Context.MODE_PRIVATE).edit().putFloat("edge_offset", edgeOffset).apply()
+    }
+    private fun projectMount(): Pair<java.io.File, String>? = project?.let { p -> runCatching { store.root(p.id) to p.name }.getOrNull() }
     var searchResults by mutableStateOf<List<SearchHit>>(emptyList())
         private set
     var searching by mutableStateOf(false)
@@ -96,6 +108,10 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         override suspend fun afterAgentChangedFiles() = reloadFromDisk()
         override val gitBridge get() = gitAccountBridge
         override fun projectName(id: String) = projects.firstOrNull { it.id == id }?.name
+        override fun environmentNotes() = linux.agentNotes(project?.name)
+        override fun extraToolsets(approver: dev.moavia.codriod.agent.Approver): List<dev.moavia.codriod.agent.AgentToolset> =
+            if (linux.phase == dev.moavia.codriod.linux.LinuxPhase.Unsupported) emptyList()
+            else listOf(dev.moavia.codriod.linux.LinuxToolset(linux, approver, ::projectMount))
 
         override fun browserTools(vision: () -> Boolean, onScreenshot: (String) -> Unit) =
             BrowserAgentTools(browser, { agent.browserEnabled }, vision, java.io.File(getApplication<Application>().cacheDir, "agent-shots"), onScreenshot)
@@ -546,8 +562,35 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
 
     fun showTerminal() {
         val current = project ?: return
-        if (terminal == null) terminal = WorkspaceTerminalController(getApplication(), store.root(current.id))
+        if (terminal == null) terminal = WorkspaceTerminalController(getApplication(), store.root(current.id)) {
+            if (linux.ready) dev.moavia.codriod.linux.UbuntuShellBackend(linux, ::projectMount) else null
+        }
         terminalOpen = true
+    }
+
+    /** Opens the terminal in Ubuntu and starts an AI CLI (or its sign-in) in the project folder. */
+    fun openCli(id: String, login: Boolean = false) {
+        val cli = dev.moavia.codriod.linux.CliCatalog.byId(id) ?: return
+        if (!linux.ready || id !in linux.installed) { linuxOpen = true; return }
+        if (project == null) { message = "Open a project first"; return }
+        agentPanelOpen = false
+        showTerminal()
+        terminal?.useShell("ubuntu", if (login && cli.loginCommand != null) cli.loginCommand else cli.command)
+    }
+
+    /** Opens the agent panel and sends [text] (e.g. an install problem to fix). */
+    fun askAgent(text: String) {
+        if (project == null) { message = "Open a project, then ask Codriod AI from the editor"; return }
+        linuxOpen = false; addonsOpen = false
+        agentPanelOpen = true
+        agent.send(text)
+    }
+
+    /** Opens the terminal in Ubuntu (optionally typing [command]). */
+    fun openUbuntuTerminal(command: String? = null) {
+        if (project == null) { message = "Open a project first"; return }
+        showTerminal()
+        terminal?.useShell("ubuntu", command)
     }
 
     fun runActive() = task {
