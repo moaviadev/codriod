@@ -1,13 +1,20 @@
 # GitHub login in Codriod
 
 Codriod provides the environment. It is not a GitHub account provider. Each person
-signs in to their own GitHub account and controls their own repositories.
+signs in to their own GitHub account and controls their own repositories. There are
+two ways to do this, and both use credentials the person owns:
+
+- **SSH key (recommended):** Codriod creates a key on the phone, and the person adds
+  its public half to their GitHub account.
+- **Access token (HTTPS):** the person creates a personal access token on GitHub and
+  pastes it into Codriod.
 
 ## What Codriod does not do
 
 - It has no Codriod GitHub OAuth app, client ID or client secret.
-- It never asks for GitHub passwords or personal access tokens, and rejects
-  remote URLs that contain them.
+- It never asks for a GitHub password and never creates, requests or issues tokens
+  itself. A token is only used if the person creates one on GitHub and chooses to
+  enter it. Remote URLs that embed passwords or tokens are rejected.
 - It has no server and no central authentication service. Nothing about a user's
   Git login leaves their phone except the normal SSH handshake with their Git host.
 
@@ -46,13 +53,22 @@ at `https://github.com/settings/keys`.
 - **No secrets for the agent.** The UI, the coding agent and logs only ever receive
   public keys, fingerprints and the verified account name.
 
-## HTTPS remotes
+## HTTPS remotes and the user's access token
 
 Public repositories clone and fetch anonymously over HTTPS. Private repositories,
-and pushing, need a login. Over HTTPS that would mean a password, a token or an
-OAuth app. Codriod deliberately has none of these. Instead, it offers to switch a
-`https://github.com/owner/repo` origin to `git@github.com:owner/repo.git`, which
-uses the user's SSH key.
+and pushing, need a login. There are two options:
+
+1. **Save your own access token.** In Source Control > Remote > *Access token
+   (HTTPS)*, *Create on GitHub* opens GitHub's own token page, pre-filled with the
+   name "Codriod" and the `repo` scope. The person decides the scopes and expiry and
+   creates the token themselves. *Check & save* calls GitHub's `GET /user` to confirm
+   which account owns the token. The token is then sealed exactly like SSH keys
+   (Android Keystore, excluded from backups) and sent only to `github.com` HTTPS
+   remotes, as HTTP Basic auth with the username `x-access-token`. It is never shown
+   again and never given to the coding agent. *Remove* deletes it from the phone; it
+   should also be revoked on GitHub.
+2. **Switch to SSH.** Codriod offers to change a `https://github.com/owner/repo`
+   origin to `git@github.com:owner/repo.git`, which uses the SSH key.
 
 ## Android compatibility decisions
 
@@ -83,7 +99,7 @@ my account":
 
 | Tool | What it does | Approval |
 | --- | --- | --- |
-| `git_account_status` | Reports available tools, login method, key storage, public fingerprints, the verified account, origin and author | none (read-only) |
+| `git_account_status` | Reports available tools, both login methods, key storage, public fingerprints, whether a token is saved (never the token), the verified account, origin and author | none (read-only) |
 | `github_login_start` | Creates a key if needed, copies the public key and opens GitHub's Add SSH key page | required |
 | `github_login_verify` | Confirms GitHub accepts the key and returns the username | none (read-only) |
 | `git_configure` | Sets author name and email, the origin URL, and HTTPS→SSH | required |
@@ -91,11 +107,13 @@ my account":
 | `git_sync` | Fetch (no approval), pull or push (approval) | pull/push |
 
 The person always completes the GitHub sign-in and approval themselves in the
-browser. `WorkspaceModel.gitAccountBridge` implements these tools. They become
+browser. The agent is told never to ask for tokens, passwords or keys in the chat;
+tokens are entered only in Source Control > Remote. `WorkspaceModel.gitAccountBridge` implements these tools. They become
 available as soon as the agent chat UI is connected.
 
 ## Limitations
 
 - Merge conflicts during pull are reported but not resolved in the app.
 - There is no force push.
-- HTTPS login for private repositories is not provided (see above).
+- Tokens are supported for `github.com` only; other HTTPS hosts are anonymous
+  (use SSH for them).

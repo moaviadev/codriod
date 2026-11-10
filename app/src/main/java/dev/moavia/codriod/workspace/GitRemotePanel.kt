@@ -44,8 +44,9 @@ fun GitRemoteTab(model: WorkspaceModel) {
         if (sshSuggestion != null) {
             Surface(shape = RoundedCornerShape(6.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
                 Column(Modifier.fillMaxWidth().padding(10.dp)) {
-                    Text("This origin uses HTTPS. Codriod never asks for GitHub passwords or tokens, so private " +
-                        "repositories and push use your SSH key instead.",
+                    Text(if (model.gitAccount.githubToken != null) "This origin uses HTTPS and your saved access token. " +
+                        "You can also switch it to SSH to use your key." else "This origin uses HTTPS. For private repositories " +
+                        "and push, save your own access token above or switch to SSH to use your key.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     TextButton(onClick = model::useSshRemote, enabled = !model.busy,
                         contentPadding = PaddingValues(horizontal = 0.dp)) { Text("Switch to $sshSuggestion", maxLines = 1,
@@ -85,7 +86,8 @@ fun GitHubAccountSection(model: WorkspaceModel) {
             if (key == null) {
                 Text("Not signed in", style = MaterialTheme.typography.titleMedium)
                 Text("Codriod creates an SSH key on this phone. You add its public key to your own GitHub account " +
-                    "on github.com and approve it there. Codriod never sees your password or tokens and has no account of its own.",
+                    "on github.com and approve it there. Codriod never sees your GitHub password and has no account of its own. " +
+                    "You can also use an access token you create yourself (below).",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Button(onClick = model::startGitHubLogin, enabled = !model.busy, modifier = Modifier.fillMaxWidth()) {
                     Text("Set up GitHub login")
@@ -140,6 +142,7 @@ fun GitHubAccountSection(model: WorkspaceModel) {
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+    GitHubTokenSection(model)
     if (confirmDelete && key != null) AlertDialog(onDismissRequest = { confirmDelete = false },
         title = { Text("Remove SSH key?") },
         text = { Text("“${key.label}” is deleted from this phone. Also delete it from github.com/settings/keys so it can't be used anywhere.") },
@@ -163,8 +166,8 @@ fun CloneRepositoryDialog(model: WorkspaceModel, onDismiss: () -> Unit) {
                     placeholder = { Text("git@github.com:you/repo.git") }, textStyle = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(name, { name = it.take(64) }, singleLine = true, label = { Text("Project name") },
                     placeholder = { Text(suggestedName.ifBlank { "my-repo" }) })
-                Text(if (isSsh) "Private and public repositories over SSH use your own GitHub login below."
-                    else "Public HTTPS repositories clone without signing in. For private ones use the SSH address.",
+                Text(if (isSsh) "Private and public repositories over SSH use your own SSH key below."
+                    else "Public HTTPS repositories clone without signing in. Private ones use your saved access token, or the SSH address.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 GitHubAccountSection(model)
             }
@@ -190,4 +193,54 @@ fun HostTrustDialog(model: WorkspaceModel) {
         },
         confirmButton = { TextButton(onClick = model::trustPendingHost) { Text("Trust") } },
         dismissButton = { TextButton(onClick = { model.gitAccount.pendingHost = null }) { Text("Cancel") } })
+}
+
+/** Optional: an access token the user creates on their own GitHub account, for HTTPS remotes. */
+@Composable
+fun GitHubTokenSection(model: WorkspaceModel) {
+    val account = model.gitAccount
+    val saved = account.githubToken
+    var draft by remember { mutableStateOf("") }
+    var confirmRemove by remember { mutableStateOf(false) }
+    SectionLabel("ACCESS TOKEN (HTTPS)")
+    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (saved != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(saved.user?.let { "Token saved for @$it" } ?: "Token saved", style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f))
+                    TextButton(onClick = { confirmRemove = true }, enabled = !model.busy) {
+                        Text("Remove", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                Text("Used only for https://github.com remotes. It is never shown again, never sent to AI agents, " +
+                    "and stays encrypted on this phone.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Text("Prefer HTTPS? Create a token on your GitHub account (scope: repo) and paste it here. " +
+                    "Codriod checks it with GitHub and stores it encrypted on this phone.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedTextField(draft, { draft = it.trim().take(255) }, modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    enabled = !model.busy, placeholder = { Text("ghp_… or github_pat_…") },
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    textStyle = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = { account.openUrl(GitAccountController.GITHUB_NEW_TOKEN_URL) },
+                        modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 6.dp)) {
+                        Text("Create on GitHub", maxLines = 1)
+                    }
+                    Button(onClick = { model.saveGitHubToken(draft); draft = "" }, enabled = !model.busy && draft.length >= 20,
+                        modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 6.dp)) {
+                        Text("Check & save", maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+    if (confirmRemove) AlertDialog(onDismissRequest = { confirmRemove = false },
+        title = { Text("Remove access token?") },
+        text = { Text("The token is deleted from this phone. Also revoke it at github.com/settings/tokens if you no longer need it.") },
+        confirmButton = { TextButton(onClick = { confirmRemove = false; model.removeGitHubToken() }) {
+            Text("Remove", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Cancel") } })
 }

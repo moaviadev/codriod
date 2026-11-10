@@ -15,6 +15,7 @@ import org.eclipse.jgit.transport.RemoteSession
 import org.eclipse.jgit.transport.SshSessionFactory
 import org.eclipse.jgit.transport.SshTransport
 import org.eclipse.jgit.transport.URIish
+import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider
 import org.eclipse.jgit.transport.ssh.jsch.JschSession
 import org.eclipse.jgit.util.FS
 import java.io.ByteArrayOutputStream
@@ -22,7 +23,7 @@ import java.io.File
 import java.io.IOException
 
 class GitAuthException(val kind: Kind, message: String, val unknownHost: UnknownHostKey? = null) : IOException(message) {
-    enum class Kind { UnknownHost, HostKeyChanged, AuthFailed, NoIdentity, HttpsNeedsSsh, Network, Rejected, Other }
+    enum class Kind { UnknownHost, HostKeyChanged, AuthFailed, NoIdentity, HttpsNeedsLogin, TokenRejected, Network, Rejected, Other }
 }
 
 data class ToolScan(val gitCli: String?, val githubCli: String?, val sshCli: String?) {
@@ -38,12 +39,12 @@ data class ToolScan(val gitCli: String?, val githubCli: String?, val sshCli: Str
 data class RemoteResult(val message: String, val updatedFiles: Boolean = false)
 
 /**
- * Network Git for one Android user. Authentication is the user's own SSH key; Codriod has no OAuth app,
- * no tokens and no server. HTTPS works anonymously (public repositories); private HTTPS GitHub remotes
- * are switched to the equivalent SSH address with the user's consent.
+ * Network Git for one Android user, authenticated only with credentials the user owns: an SSH key
+ * created on the phone and added to their account, or an access token they created on their account
+ * and pasted in. Codriod has no OAuth app and no server. Without a token, HTTPS is anonymous.
  */
 class GitRemoteService(private val identities: SshIdentityStore, private val hostKeys: CodriodHostKeys,
-    private val timeoutSeconds: Int = 30) {
+    private val timeoutSeconds: Int = 30, private val tokens: GitTokenStore? = null) {
 
     companion object {
         const val IDENTITY_KEY = "sshIdentity"
@@ -63,10 +64,11 @@ class GitRemoteService(private val identities: SshIdentityStore, private val hos
                 "Enter a repository URL"
             }
             require(!value.startsWith("-")) { "Invalid repository URL" }
-            val ok = value.startsWith("https://") || isSsh(value) || (allowLocal && value.startsWith("file://"))
+            val ok = value.startsWith("https://") || isSsh(value) || (allowLocal && (value.startsWith("file://") ||
+                value.startsWith("http://127.0.0.1:") || value.startsWith("http://localhost:")))
             require(ok) { "Use an https:// or SSH (git@host:owner/repo.git) URL" }
-            require(!Regex("^https://[^/]*:[^/]*@").containsMatchIn(value)) {
-                "Do not put passwords or tokens in the URL. Use SSH login instead."
+            require(!Regex("^https?://[^/]*:[^/]*@").containsMatchIn(value)) {
+                "Do not put passwords or tokens in the URL. Save your access token in Git login instead."
             }
             return value
         }
@@ -128,7 +130,7 @@ class GitRemoteService(private val identities: SshIdentityStore, private val hos
         val identity = identityId?.let(identities::get) ?: identities.defaultIdentity()
         transport(value, identity) {
             Git.cloneRepository().setURI(value).setDirectory(target).setCloneAllBranches(false)
-                .configure(identity).call().use { git ->
+                .configure(identity, value).call().use { git ->
                     // An empty remote has no branch yet; start on "main" like new local projects.
                     if (git.repository.resolve(Constants.HEAD) == null) git.repository.updateRef(Constants.HEAD).link("refs/heads/main")
                     identity?.let { git.repository.config.apply { setString("codriod", null, IDENTITY_KEY, it.id); save() } }
@@ -139,7 +141,7 @@ class GitRemoteService(private val identities: SshIdentityStore, private val hos
 
     fun fetch(root: File): RemoteResult = open(root).use { git ->
         val (url, identity) = remoteFor(git, root)
-        val result = transport(url, identity) { git.fetch().setRemote("origin").configure(identity).call() }
+        val result = transport(url, identity) { git.fetch().setRemote("origin").configure(identity, url).call() }
         val updates = result.trackingRefUpdates.size
         RemoteResult(if (updates == 0) "Already up to date with origin" else "Fetched $updates updated branch(es)")
     }
@@ -148,7 +150,7 @@ class GitRemoteService(private val identities: SshIdentityStore, private val hos
         val (url, identity) = remoteFor(git, root)
         val branch = git.repository.branch
         val result = transport(url, identity) {
-            git.pull().setRemote("origin").setRemoteBranchName(branch).configure(identity).call()
+            git.pull().setRemote("origin").setRemoteBranchName(branch).configure(identity, url).call()
         }
         if (!result.isSuccessful) {
             val merge = result.mergeResult
@@ -167,7 +169,7 @@ class GitRemoteService(private val identities: SshIdentityStore, private val hos
         val branch = git.repository.branch
         val results = transport(url, identity) {
             git.push().setRemote("origin").setRefSpecs(RefSpec("refs/heads/$branch:refs/heads/$branch"))
-                .configure(identity).call()
+                .configure(identity, url).call()
         }
         val updates = results.flatMap { it.remoteUpdates }
         val failed = updates.filter { it.status !in listOf(RemoteRefUpdate.Status.OK, RemoteRefUpdate.Status.UP_TO_DATE) }
@@ -192,7 +194,7 @@ class GitRemoteService(private val identities: SshIdentityStore, private val hos
     fun testAccess(url: String, identityId: String? = null, allowLocal: Boolean = false): RemoteResult {
         val value = validateRemoteUrl(url, allowLocal)
         val identity = identityId?.let(identities::get) ?: identities.defaultIdentity()
-        val refs = transport(value, identity) { Git.lsRemoteRepository().setRemote(value).setHeads(true).configure(identity).call() }
+        val refs = transport(value, identity) { Git.lsRemoteRepository().setRemote(value).setHeads(true).configure(identity, value).call() }
         return RemoteResult("Access OK: ${displayUrl(value)} has ${refs.size} branch(es)" +
             if (refs.isNotEmpty()) " (${refs.take(5).joinToString { it.name.removePrefix("refs/heads/") }})" else "")
     }
@@ -239,9 +241,15 @@ class GitRemoteService(private val identities: SshIdentityStore, private val hos
         return url to identityFor(root)
     }
 
-    private fun <C : TransportCommand<C, *>> C.configure(identity: SshIdentity?): C {
+    private fun hostOf(url: String): String? = Regex("^https?://(?:[^@/]+@)?([^/:]+)").find(url)?.groupValues?.get(1)?.lowercase()
+
+    private fun tokenFor(url: String): String? = if (!url.startsWith("http")) null else hostOf(url)?.let { tokens?.secret(it) }
+
+    private fun <C : TransportCommand<C, *>> C.configure(identity: SshIdentity?, url: String): C {
         setTimeout(timeoutSeconds)
-        setCredentialsProvider(NoCredentials)
+        // The user's own token, only for the host it was saved for; otherwise HTTPS stays anonymous.
+        val token = tokenFor(url)
+        setCredentialsProvider(if (token != null) UsernamePasswordCredentialsProvider("x-access-token", token) else NoCredentials)
         setTransportConfigCallback { transport ->
             if (transport is SshTransport) transport.sshSessionFactory = SessionFactory(identity)
         }
@@ -270,12 +278,14 @@ class GitRemoteService(private val identities: SshIdentityStore, private val hos
             text.contains("Auth fail", true) || text.contains("Auth cancel", true) || text.contains("publickey", true) ->
                 GitAuthException(GitAuthException.Kind.AuthFailed,
                     "The server rejected your SSH key. Add the public key to your account, then try again.")
-            url != null && url.startsWith("https://") && (text.contains("not authorized", true) ||
+            url != null && url.startsWith("http") && (text.contains("not authorized", true) ||
                 text.contains("Authentication is required", true) || text.contains("401") || text.contains("403") ||
                 text.contains("CredentialsProvider", true)) ->
-                GitAuthException(GitAuthException.Kind.HttpsNeedsSsh, githubSshUrl(url)?.let {
-                    "This HTTPS remote needs a login. Codriod does not take passwords or tokens; switch the remote to SSH ($it)."
-                } ?: "This HTTPS remote needs a login. Codriod does not take passwords or tokens; use the SSH address instead.")
+                if (tokenFor(url) != null) GitAuthException(GitAuthException.Kind.TokenRejected,
+                    "The server rejected your saved access token. It may be expired or lack access to this repository.")
+                else GitAuthException(GitAuthException.Kind.HttpsNeedsLogin,
+                    "This HTTPS remote needs a login. Add your own access token in Git login" +
+                        (githubSshUrl(url)?.let { ", or switch the remote to SSH ($it)." } ?: ", or use the SSH address."))
             text.contains("UnknownHost", true) || text.contains("timed out", true) || text.contains("Connection refused", true) ||
                 text.contains("Network is unreachable", true) || text.contains("cannot open git-upload-pack", true) ->
                 GitAuthException(GitAuthException.Kind.Network, "Could not reach the server: ${error.message ?: text}".take(300))

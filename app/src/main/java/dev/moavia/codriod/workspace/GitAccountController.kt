@@ -13,6 +13,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.moavia.codriod.git.CodriodHostKeys
 import dev.moavia.codriod.git.GitRemoteService
+import dev.moavia.codriod.git.GitToken
+import dev.moavia.codriod.git.GitTokenStore
 import dev.moavia.codriod.git.KeyVault
 import dev.moavia.codriod.git.PlainVault
 import dev.moavia.codriod.git.SshIdentity
@@ -72,10 +74,15 @@ class GitAccountController(context: Context) {
     companion object {
         const val GITHUB_ADD_KEY_URL = "https://github.com/settings/ssh/new"
         const val GITHUB_KEYS_URL = "https://github.com/settings/keys"
+        /** GitHub's own token page, pre-filled with a name and the repo scope; the user decides and creates it. */
+        const val GITHUB_NEW_TOKEN_URL = "https://github.com/settings/tokens/new?description=Codriod&scopes=repo"
     }
 
     private val appContext = context.applicationContext
-    val identities = SshIdentityStore(File(appContext.filesDir, "git-identities"), chooseVault())
+    private val vault = chooseVault()
+    val identities = SshIdentityStore(File(appContext.filesDir, "git-identities"), vault)
+    /** Access tokens the user created on their own account and pasted in, sealed like SSH keys. */
+    val tokens = GitTokenStore(File(appContext.filesDir, "git-tokens"), vault)
 
     /** Android Keystore when it works on this device; app-private storage otherwise (Android 5-5.1, broken Keystores). */
     private fun chooseVault(): KeyVault {
@@ -86,11 +93,13 @@ class GitAccountController(context: Context) {
             else PlainVault
     }
     val hostKeys = CodriodHostKeys(File(appContext.filesDir, "git-known-hosts"))
-    val remote = GitRemoteService(identities, hostKeys)
+    val remote = GitRemoteService(identities, hostKeys, tokens = tokens)
 
     var keys by mutableStateOf<List<SshIdentity>>(emptyList())
         private set
     var defaultKeyId by mutableStateOf<String?>(null)
+        private set
+    var githubToken by mutableStateOf<GitToken?>(null)
         private set
     /** A server whose fingerprint the person must confirm before Codriod connects to it. */
     var pendingHost by mutableStateOf<UnknownHostKey?>(null)
@@ -100,7 +109,18 @@ class GitAccountController(context: Context) {
     fun reload() {
         keys = identities.list()
         defaultKeyId = identities.defaultIdentity()?.id
+        githubToken = tokens.get("github.com")
     }
+
+    /** Checks the user's own token with GitHub, then seals it on this phone. Blocking network call. */
+    fun saveGitHubToken(token: String): String {
+        val user = tokens.verifyGitHubToken(token)
+        tokens.save("github.com", token, user)
+        reload()
+        return user
+    }
+
+    fun removeGitHubToken() { tokens.delete("github.com"); reload() }
 
     fun defaultKey(): SshIdentity? = keys.firstOrNull { it.id == defaultKeyId }
 
