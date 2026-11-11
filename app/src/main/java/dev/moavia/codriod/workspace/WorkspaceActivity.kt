@@ -74,6 +74,7 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
     }
     var createDialog by remember { mutableStateOf(false) }
     var newEntry by remember { mutableStateOf<String?>(null) }
+    var newEntryParent by remember { mutableStateOf("") }
     var renameEntry by remember { mutableStateOf<ProjectEntry?>(null) }
     var deleteEntry by remember { mutableStateOf<ProjectEntry?>(null) }
     val snackbar = remember { SnackbarHostState() }
@@ -162,8 +163,8 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
     }
     if (model.fileSheet && model.project != null)
         ProjectFilesSheet(model,
-            onNewFile = { model.fileSheet = false; newEntry = "file" },
-            onNewFolder = { model.fileSheet = false; newEntry = "folder" },
+            onNewFile = { parent -> model.fileSheet = false; newEntryParent = parent; newEntry = "file" },
+            onNewFolder = { parent -> model.fileSheet = false; newEntryParent = parent; newEntry = "folder" },
             onRename = { model.fileSheet = false; renameEntry = it },
             onDelete = { model.fileSheet = false; deleteEntry = it },
             onOpen = { model.openFile(it) },
@@ -171,8 +172,13 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
     if (model.searchSheet && model.project != null) ProjectSearchSheet(model) { model.searchSheet = false }
     newEntry?.let { kind -> WorkspaceNameDialog(
         title = if (kind == "folder") "New folder" else "New file",
-        confirmText = "Create", onDismiss = { newEntry = null },
-        onConfirm = { newEntry = null; model.createEntry(it, kind == "folder") }
+        confirmText = "Create", onDismiss = { newEntry = null; newEntryParent = "" },
+        onConfirm = { name ->
+            val parent = newEntryParent
+            newEntry = null
+            newEntryParent = ""
+            model.createEntry(if (parent.isEmpty()) name else "$parent/$name", kind == "folder")
+        }
     ) }
     renameEntry?.let { item -> WorkspaceNameDialog(
         title = "Rename ${item.path.substringAfterLast('/')}", confirmText = "Rename",

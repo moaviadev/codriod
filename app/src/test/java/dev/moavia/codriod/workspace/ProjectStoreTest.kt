@@ -56,6 +56,24 @@ class ProjectStoreTest {
     }
 
     @Test
+    fun nestedFoldersSupportCreationRenamingDeletionAndDuplicateChecks() {
+        val store = store()
+        val project = store.createProject("nested", "Empty")
+        store.createEntry(project.id, "a", folder = true)
+        store.createEntry(project.id, "a/b", folder = true)
+        store.createEntry(project.id, "a/b/notes.txt", folder = false)
+        assertTrue(store.entries(project.id).any { it.path == "a/b/notes.txt" && !it.directory })
+        assertThrows(IllegalArgumentException::class.java) {
+            store.createEntry(project.id, "a/b/notes.txt", folder = false)
+        }
+        store.rename(project.id, "a/b/notes.txt", "a/b/renamed.txt")
+        assertEquals("", store.read(project.id, "a/b/renamed.txt"))
+        store.delete(project.id, "a/b/renamed.txt")
+        store.delete(project.id, "a/b")
+        assertFalse(store.entries(project.id).any { it.path.startsWith("a/b") })
+    }
+
+    @Test
     fun rejectsBinaryAndOversizedEditorFiles() {
         val store = store()
         val project = store.createProject("limited", "Empty")
