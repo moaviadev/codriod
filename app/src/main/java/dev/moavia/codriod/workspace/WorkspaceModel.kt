@@ -1,6 +1,8 @@
 package dev.moavia.codriod.workspace
 
 import android.app.Application
+import android.content.ClipData
+import android.content.ClipboardManager
 import androidx.compose.runtime.*
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
@@ -66,6 +68,8 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     var previewOpen by mutableStateOf(false)
     var fileSheet by mutableStateOf(false)
     var searchSheet by mutableStateOf(false)
+    /** In-file find/replace bar in the editor. */
+    var findOpen by mutableStateOf(false)
     var gitOpen by mutableStateOf(false)
     var gitSnapshot by mutableStateOf(GitSnapshot())
         private set
@@ -516,6 +520,91 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         doc.undo.addLast(doc.value)
         doc.value = doc.redo.removeLast()
         scheduleSave(doc)
+    }
+
+    /** Inserts a completion, replacing the typed token and restoring the caret inside the snippet. */
+    fun applyCompletion(item: CompletionItem, replaceStart: Int, replaceEnd: Int) {
+        val doc = activeDocument ?: return
+        val text = doc.value.text
+        val start = replaceStart.coerceIn(0, text.length)
+        val end = replaceEnd.coerceIn(start, text.length)
+        val newText = text.replaceRange(start, end, item.insert)
+        val caret = (start + item.cursor).coerceIn(0, newText.length)
+        edit(doc, TextFieldValue(newText, TextRange(caret)))
+    }
+
+    private fun clipboard(): ClipboardManager =
+        getApplication<Application>().getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
+
+    private fun putClipboard(text: String) {
+        clipboard().setPrimaryClip(ClipData.newPlainText("Codriod", text))
+    }
+
+    /** Copies the complete text of the active file (not just the visible lines). */
+    fun copyAll() {
+        val doc = activeDocument ?: return
+        val text = doc.value.text
+        if (text.isEmpty()) { message = "Nothing to copy"; return }
+        putClipboard(text)
+        message = "Code copied successfully"
+    }
+
+    fun copySelection() {
+        val doc = activeDocument ?: return
+        val selection = doc.value.selection
+        if (selection.collapsed) { message = "Select some code first"; return }
+        val text = doc.value.text.substring(selection.min, selection.max)
+        if (text.isEmpty()) { message = "Nothing to copy"; return }
+        putClipboard(text)
+        message = "Selection copied"
+    }
+
+    fun cutSelection() {
+        val doc = activeDocument ?: return
+        val selection = doc.value.selection
+        if (selection.collapsed) { message = "Select some code first"; return }
+        val text = doc.value.text.substring(selection.min, selection.max)
+        if (text.isEmpty()) { message = "Nothing to cut"; return }
+        putClipboard(text)
+        edit(doc, TextFieldValue(doc.value.text.removeRange(selection.min, selection.max), TextRange(selection.min)))
+        message = "Selection cut"
+    }
+
+    fun paste() {
+        val doc = activeDocument ?: return
+        val clip = clipboard().primaryClip
+        val text = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(getApplication()).toString() else ""
+        if (text.isEmpty()) { message = "Clipboard is empty"; return }
+        val value = doc.value
+        val start = value.selection.min
+        val end = value.selection.max
+        edit(doc, TextFieldValue(value.text.replaceRange(start, end, text), TextRange(start + text.length)))
+    }
+
+    fun selectAll() {
+        val doc = activeDocument ?: return
+        doc.value = doc.value.copy(selection = TextRange(0, doc.value.text.length))
+    }
+
+    /** Replaces the current selection (when it matches [query]) or all occurrences in the active file. */
+    fun replaceInFile(query: String, replacement: String, all: Boolean) {
+        val doc = activeDocument ?: return
+        if (query.isEmpty()) return
+        val text = doc.value.text
+        if (all) {
+            if (!text.contains(query, ignoreCase = true)) { message = "No matches"; return }
+            val updated = text.replace(query, replacement, ignoreCase = true)
+            edit(doc, TextFieldValue(updated, TextRange(0)))
+            message = "Replaced all occurrences"
+        } else {
+            val selection = doc.value.selection
+            val selected = if (!selection.collapsed) text.substring(selection.min, selection.max) else ""
+            if (selected.equals(query, ignoreCase = true)) {
+                edit(doc, TextFieldValue(text.replaceRange(selection.min, selection.max, replacement), TextRange(selection.min + replacement.length)))
+            } else {
+                message = "Select a match to replace"
+            }
+        }
     }
 
     private fun scheduleSave(doc: EditorDocument) {

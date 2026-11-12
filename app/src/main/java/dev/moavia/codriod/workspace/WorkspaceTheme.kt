@@ -13,7 +13,8 @@ import androidx.compose.ui.unit.sp
 
 @Immutable
 data class CodeColors(val header: Color, val selection: Color, val keyword: Color,
-    val string: Color, val comment: Color, val success: Color, val dark: Boolean)
+    val string: Color, val comment: Color, val success: Color, val dark: Boolean,
+    val number: Color = Color(0xFFB5CEA8), val tag: Color = Color(0xFF569CD6))
 
 val LocalCodeColors = staticCompositionLocalOf {
     CodeColors(Color(0xFF2D2D30), Color(0xFF094771), Color(0xFF569CD6),
@@ -44,7 +45,8 @@ fun WorkspaceTheme(mode: String = "System", content: @Composable () -> Unit) {
     )
     val code = if (dark) LocalCodeColors.current else CodeColors(
         Color(0xFFECECEC), Color(0xFFD6EBFF), Color(0xFF0000FF),
-        Color(0xFFA31515), Color(0xFF008000), Color(0xFF137333), false)
+        Color(0xFFA31515), Color(0xFF008000), Color(0xFF137333), false,
+        number = Color(0xFF098658), tag = Color(0xFF800000))
     val type = Typography(
         titleLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold,
             fontSize = 26.sp, letterSpacing = (-0.6).sp),

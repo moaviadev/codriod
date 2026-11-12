@@ -1,5 +1,6 @@
 package dev.moavia.codriod.workspace
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,25 +20,77 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.moavia.codriod.R
 import java.util.Calendar
 
-private val Blue = Color(0xFF007ACC)
-private val Blue2 = Color(0xFF3794FF)
-private val GreenTile = Color(0xFF2F8F5B)
-private val AgentBrush = Brush.linearGradient(listOf(Color(0xFF7C4DFF), Color(0xFFC586C0)))
+@Immutable
+internal data class HomePalette(
+    val dark: Boolean,
+    val base: Color,
+    val baseBottom: Color,
+    val glass: Color,
+    val glassStrong: Color,
+    val border: Color,
+    val text: Color,
+    val muted: Color,
+    val primary: Color,
+    val primary2: Color,
+    val accent: Color,
+    val success: Color,
+    val shadow: Color
+)
 
-/** Home: continue the last project, four big actions, and all projects. */
+private val LightHomePalette = HomePalette(
+    dark = false,
+    base = Color(0xFFF8FBFF),
+    baseBottom = Color(0xFFF2EFFF),
+    glass = Color(0xD9FFFFFF),
+    glassStrong = Color(0xF5FFFFFF),
+    border = Color(0xFFDCE6F5),
+    text = Color(0xFF101828),
+    muted = Color(0xFF667085),
+    primary = Color(0xFF4F7DFF),
+    primary2 = Color(0xFF8B5CF6),
+    accent = Color(0xFF22B8CF),
+    success = Color(0xFF16A34A),
+    shadow = Color(0x336B7A99)
+)
+
+private val DarkHomePalette = HomePalette(
+    dark = true,
+    base = Color(0xFF0B1020),
+    baseBottom = Color(0xFF120F24),
+    glass = Color(0xD9151D2E),
+    glassStrong = Color(0xF51B2438),
+    border = Color(0x1FFFFFFF),
+    text = Color(0xFFF4F7FF),
+    muted = Color(0xFF9AA7BD),
+    primary = Color(0xFF6C8DFF),
+    primary2 = Color(0xFFA78BFA),
+    accent = Color(0xFF22D3EE),
+    success = Color(0xFF4ADE80),
+    shadow = Color(0x66000000)
+)
+
+internal val LocalHomePalette = staticCompositionLocalOf { LightHomePalette }
+private val GreenTile = Color(0xFF2F8F5B)
+
 @Composable
 fun WorkspaceHome(
     model: WorkspaceModel,
@@ -46,8 +99,7 @@ fun WorkspaceHome(
     onClone: () -> Unit,
     onOpenTerminal: () -> Unit
 ) {
-    var newSheet by remember { mutableStateOf<String?>(null) }
-    // Re-check storage access when coming back from the "All files access" settings page.
+    var newProjectInitial by remember { mutableStateOf<String?>(null) }
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -56,79 +108,157 @@ fun WorkspaceHome(
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
     }
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        if (model.projects.isEmpty()) FirstRun(model, onNew = { newSheet = it ?: "Web" }, onOpenFolder, onClone, onOpenTerminal)
-        else HomeWithProjects(model, onNew = { newSheet = "Web" }, onOpenFolder, onClone, onOpenTerminal)
-    }
-    newSheet?.let { template ->
-        NewProjectSheet(template, onDismiss = { newSheet = null }, onGitHub = { newSheet = null; onClone() }) { name, chosen ->
-            newSheet = null; model.createProject(name, chosen)
+    val palette = if (LocalCodeColors.current.dark) DarkHomePalette else LightHomePalette
+    CompositionLocalProvider(LocalHomePalette provides palette) {
+        Box(Modifier.fillMaxSize()) {
+            HomeBackdrop()
+            val initial = newProjectInitial
+            if (initial != null) {
+                NewProjectScreen(
+                    model = model,
+                    initial = initial,
+                    onBack = { newProjectInitial = null },
+                    onOpenTerminal = onOpenTerminal,
+                    onClone = { newProjectInitial = null; onClone() },
+                    onCreate = { name, template -> newProjectInitial = null; model.createProject(name, template) }
+                )
+            } else {
+                if (model.projects.isEmpty()) FirstRun(model, onNew = { newProjectInitial = it ?: "Web" }, onOpenFolder, onClone, onOpenTerminal)
+                else HomeWithProjects(model, onNew = { newProjectInitial = "Web" }, onOpenFolder, onClone, onOpenTerminal)
+            }
         }
     }
 }
 
 @Composable
-private fun TopBar(model: WorkspaceModel, onOpenTerminal: () -> Unit, showSettings: Boolean = true) {
+internal fun HomeBackdrop() {
+    val p = LocalHomePalette.current
+    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(p.base, p.baseBottom)))) {
+        Canvas(Modifier.fillMaxSize()) {
+            val blueCenter = Offset(size.width * 0.08f, size.height * 0.03f)
+            val blueRadius = size.width * 0.92f
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(p.primary.copy(alpha = if (p.dark) 0.28f else 0.20f), Color.Transparent),
+                    center = blueCenter,
+                    radius = blueRadius
+                ),
+                radius = blueRadius,
+                center = blueCenter
+            )
+            val purpleCenter = Offset(size.width * 0.96f, size.height * 0.30f)
+            val purpleRadius = size.width * 0.82f
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(p.primary2.copy(alpha = if (p.dark) 0.24f else 0.17f), Color.Transparent),
+                    center = purpleCenter,
+                    radius = purpleRadius
+                ),
+                radius = purpleRadius,
+                center = purpleCenter
+            )
+            val wave = Path().apply {
+                moveTo(0f, size.height * 0.88f)
+                cubicTo(size.width * 0.26f, size.height * 0.80f, size.width * 0.58f, size.height * 0.98f, size.width, size.height * 0.83f)
+                lineTo(size.width, size.height)
+                lineTo(0f, size.height)
+                close()
+            }
+            drawPath(
+                wave,
+                Brush.verticalGradient(
+                    listOf(
+                        Color.Transparent,
+                        p.primary.copy(alpha = if (p.dark) 0.10f else 0.05f),
+                        p.primary2.copy(alpha = if (p.dark) 0.14f else 0.08f)
+                    )
+                )
+            )
+        }
+    }
+}
+
+internal fun Modifier.glass(p: HomePalette, shape: Shape, elevated: Boolean = true): Modifier {
+    val base = if (elevated) shadow(18.dp, shape, ambientColor = p.shadow, spotColor = p.shadow) else this
+    return base.clip(shape).background(p.glass).border(1.dp, p.border, shape)
+}
+
+@Composable
+internal fun TopBar(model: WorkspaceModel, onOpenTerminal: () -> Unit, showSettings: Boolean = true, onBack: (() -> Unit)? = null) {
+    val p = LocalHomePalette.current
     var menu by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Image(painterResource(R.drawable.codriod_logo), "Codriod", Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)), contentScale = ContentScale.Fit)
-        Spacer(Modifier.width(10.dp))
-        Text("Codriod", fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-        RoundIcon(ToolIcon.Terminal, "Terminal", onOpenTerminal)
-        if (showSettings) Box {
-            Spacer(Modifier.width(8.dp))
-            RoundIcon(ToolIcon.Settings, "Settings") { menu = true }
-            DropdownMenu(menu, { menu = false }) {
-                Text("THEME", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
-                listOf("Dark", "Light", "System").forEach { mode ->
-                    DropdownMenuItem({ Text((if (model.themeMode == mode) "✓  " else "     ") + mode) }, { menu = false; model.updateTheme(mode) })
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        Row(Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            if (onBack != null) {
+                RoundIcon(p, ToolIcon.Back, "Back to Home", onBack)
+                Spacer(Modifier.width(10.dp))
+            }
+            Box(Modifier.size(42.dp).glass(p, RoundedCornerShape(14.dp), elevated = false)
+                .then(if (onBack != null) Modifier.clickable(onClick = onBack) else Modifier), contentAlignment = Alignment.Center) {
+                Image(painterResource(R.drawable.codriod_logo), "Codriod", Modifier.fillMaxSize().padding(3.dp).clip(RoundedCornerShape(11.dp)),
+                    contentScale = ContentScale.Fit)
+            }
+            Spacer(Modifier.width(11.dp))
+            Text("Codriod", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = p.text,
+                modifier = Modifier.weight(1f).then(if (onBack != null) Modifier.clickable(onClick = onBack) else Modifier))
+            RoundIcon(p, ToolIcon.Terminal, "Terminal", onOpenTerminal)
+            if (showSettings) Box {
+                Spacer(Modifier.width(8.dp))
+                RoundIcon(p, ToolIcon.Theme, "Theme") { menu = true }
+                DropdownMenu(menu, { menu = false }) {
+                    Text("THEME", fontSize = 11.sp, color = p.muted, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
+                    listOf("Dark", "Light", "System").forEach { mode ->
+                        DropdownMenuItem({ Text((if (model.themeMode == mode) "✓  " else "     ") + mode) }, { menu = false; model.updateTheme(mode) })
+                    }
                 }
             }
         }
     }
 }
 
-/**
- * Asks for storage access so projects are saved in Internal storage/Codriod (visible to file managers and other apps),
- * and offers to move older projects out of Codriod's private storage.
- */
+@Composable
+private fun RoundIcon(p: HomePalette, icon: ToolIcon, description: String, onClick: () -> Unit) {
+    Box(Modifier.size(42.dp).glass(p, CircleShape, elevated = false).clickable(onClick = onClick)
+        .semantics { contentDescription = description }, contentAlignment = Alignment.Center) {
+        ToolGlyph(icon, p.text, Modifier.size(19.dp))
+    }
+}
+
 @Composable
 fun StorageBanner(model: WorkspaceModel) {
+    val p = LocalHomePalette.current
     val context = androidx.compose.ui.platform.LocalContext.current
     val legacy = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()) { model.refreshStorage() }
     if (model.storageGranted && model.privateProjectCount == 0) return
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp))
-        .background(Color(0xFF0B2A44)).border(1.dp, Color(0xFF1D4E7A), RoundedCornerShape(14.dp)).padding(14.dp)) {
+    Column(Modifier.padding(horizontal = 18.dp, vertical = 6.dp).fillMaxWidth().glass(p, RoundedCornerShape(18.dp)).padding(16.dp)) {
         if (!model.storageGranted) {
-            Text("📁  Save projects in your phone's storage", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text("📁  Save projects in your phone's storage", color = p.text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
             Text("Projects will be normal folders in Internal storage/Codriod, next to Downloads, so file managers, other apps " +
-                "and your computer can open them. Opened folders are edited in place.", color = Color(0xFFB9D7F2), fontSize = 12.sp,
+                "and your computer can open them. Opened folders are edited in place.", color = p.muted, fontSize = 12.sp,
                 lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp))
             Button(onClick = {
                 if (StorageAccess.usesSettingsPage) runCatching { context.startActivity(StorageAccess.settingsIntent(context)) }
                     .onFailure { runCatching { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) } }
                 else legacy.launch(StorageAccess.legacyPermissions)
-            }, modifier = Modifier.padding(top = 10.dp), colors = ButtonDefaults.buttonColors(containerColor = Blue)) {
+            }, modifier = Modifier.padding(top = 10.dp), shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = p.primary, contentColor = Color.White)) {
                 Text(if (StorageAccess.usesSettingsPage) "Allow “All files access”" else "Allow storage")
             }
-            if (StorageAccess.usesSettingsPage) Text("In the page that opens, turn on Codriod, then come back.", color = Color(0xFF8DB4D8),
+            if (StorageAccess.usesSettingsPage) Text("In the page that opens, turn on Codriod, then come back.", color = p.muted,
                 fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
         } else {
             Text("📦  Move ${model.privateProjectCount} older project${if (model.privateProjectCount == 1) "" else "s"} to your phone's storage?",
-                color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                color = p.text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
             Text("They are still in Codriod's private storage. New projects already go to Internal storage/Codriod.",
-                color = Color(0xFFB9D7F2), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                color = p.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
             Button(onClick = { model.moveProjectsToStorage() }, enabled = !model.busy, modifier = Modifier.padding(top = 10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("Move to Internal storage/Codriod") }
+                shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = p.primary, contentColor = Color.White)) {
+                Text("Move to Internal storage/Codriod")
+            }
         }
     }
-}
-
-@Composable
-private fun RoundIcon(icon: ToolIcon, description: String, onClick: () -> Unit) {
-    Box(Modifier.padding(start = 8.dp).size(38.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface).clickable(onClick = onClick),
-        contentAlignment = Alignment.Center) { ToolGlyph(icon, MaterialTheme.colorScheme.onSurface, Modifier.size(18.dp)) }
 }
 
 private fun greeting(): String = when (Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) {
@@ -140,135 +270,145 @@ private fun greeting(): String = when (Calendar.getInstance().get(Calendar.HOUR_
 
 @Composable
 private fun HomeWithProjects(model: WorkspaceModel, onNew: () -> Unit, onOpenFolder: () -> Unit, onClone: () -> Unit, onOpenTerminal: () -> Unit) {
+    val p = LocalHomePalette.current
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("All") }
     var showAll by remember { mutableStateOf(false) }
     var rename by remember { mutableStateOf<Project?>(null) }
     var delete by remember { mutableStateOf<Project?>(null) }
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val filtered = model.projects.filter { p ->
-        p.name.contains(query.trim(), true) && when (filter) {
-            "Phone" -> p.treeUri == null && p.template != "Git"
-            "GitHub" -> p.template == "Git"
-            "Folders" -> p.treeUri != null
+    val filtered = model.projects.filter { project ->
+        project.name.contains(query.trim(), true) && when (filter) {
+            "Phone" -> project.treeUri == null && project.template != "Git"
+            "GitHub" -> project.template == "Git"
+            "Folders" -> project.treeUri != null
             else -> true
         }
     }
     val shown = if (showAll || query.isNotBlank()) filtered else filtered.take(6)
-    Box(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
-            item { TopBar(model, onOpenTerminal) }
-            item {
-                Column(Modifier.padding(horizontal = 18.dp, vertical = 6.dp)) {
-                    Text(greeting(), fontSize = 12.5.sp, color = muted)
-                    Text("What will you build today?", fontSize = 25.sp, fontWeight = FontWeight.Bold, lineHeight = 30.sp)
-                }
-            }
-            item {
-                Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth().height(44.dp).clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surface).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ToolGlyph(ToolIcon.Search, muted, Modifier.size(17.dp))
-                    Spacer(Modifier.width(10.dp))
-                    Box(Modifier.weight(1f)) {
-                        if (query.isEmpty()) Text("Search projects", color = muted, fontSize = 13.5.sp)
-                        BasicTextField(query, { query = it }, singleLine = true, cursorBrush = SolidColor(Blue2),
-                            textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onSurface, fontSize = 13.5.sp),
-                            modifier = Modifier.fillMaxWidth())
-                    }
-                    if (query.isNotEmpty()) Text("✕", color = muted, modifier = Modifier.clickable { query = "" }.padding(4.dp))
-                }
-            }
-            item { StorageBanner(model) }
-            item {
-                Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ActionTile("New", ToolIcon.Plus, SolidColor(Blue), Modifier.weight(1f), onNew)
-                    ActionTile("Open folder", ToolIcon.Folder, SolidColor(GreenTile), Modifier.weight(1f), onOpenFolder)
-                    ActionTile("GitHub", ToolIcon.Git, SolidColor(Color(0xFF333333)), Modifier.weight(1f), onClone)
-                    ActionTile("Codriod AI", ToolIcon.CodeBrackets, AgentBrush, Modifier.weight(1f)) { model.agentOpen = true }
-                }
-            }
-            model.continueInfo?.takeIf { query.isBlank() }?.let { info ->
-                item { SectionHeader("CONTINUE") }
-                item { ContinueCard(info, onOpen = { model.openProject(info.project) }) }
-            }
-            item {
-                SectionHeader("PROJECTS", trailing = if (filtered.size > 6 && query.isBlank()) (if (showAll) "Show less" else "See all") else null) { showAll = !showAll }
-                Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("All" to model.projects.size, "Phone" to null, "GitHub" to null, "Folders" to null).forEach { (label, count) ->
-                        val on = filter == label
-                        Text(if (count != null) "$label $count" else label, fontSize = 12.sp,
-                            color = if (on) Color(0xFF9FD0FF) else muted,
-                            modifier = Modifier.clip(RoundedCornerShape(14.dp)).background(if (on) Color(0xFF0B3A5E) else MaterialTheme.colorScheme.surface)
-                                .clickable { filter = label }.padding(horizontal = 12.dp, vertical = 6.dp))
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val contentWidth = if (maxWidth > 720.dp) 720.dp else maxWidth
+        Box(Modifier.width(contentWidth).fillMaxHeight().align(Alignment.TopCenter)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 110.dp)) {
+                item { TopBar(model, onOpenTerminal) }
+                item {
+                    Column(Modifier.padding(horizontal = 22.dp, vertical = 10.dp)) {
+                        Text(greeting(), fontSize = 12.5.sp, color = p.muted, fontWeight = FontWeight.Medium)
+                        Text("What will you build today?", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, lineHeight = 34.sp, color = p.text)
                     }
                 }
+                item {
+                    Row(Modifier.padding(horizontal = 18.dp, vertical = 6.dp).fillMaxWidth().height(50.dp)
+                        .glass(p, RoundedCornerShape(16.dp), elevated = false).padding(horizontal = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+                        ToolGlyph(ToolIcon.Search, p.muted, Modifier.size(17.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Box(Modifier.weight(1f)) {
+                            if (query.isEmpty()) Text("Search projects", color = p.muted, fontSize = 13.5.sp)
+                            BasicTextField(query, { query = it }, singleLine = true, cursorBrush = SolidColor(p.primary),
+                                textStyle = LocalTextStyle.current.copy(color = p.text, fontSize = 13.5.sp),
+                                modifier = Modifier.fillMaxWidth())
+                        }
+                        if (query.isNotEmpty()) Text("✕", color = p.muted, modifier = Modifier.clickable { query = "" }.padding(4.dp))
+                    }
+                }
+                item { StorageBanner(model) }
+                item {
+                    Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ActionTile("New", ToolIcon.Plus, Brush.linearGradient(listOf(p.primary, p.primary2)), Modifier.weight(1f), p, onNew)
+                        ActionTile("Open folder", ToolIcon.Folder, SolidColor(p.success), Modifier.weight(1f), p, onOpenFolder)
+                        ActionTile("GitHub", ToolIcon.Git, SolidColor(if (p.dark) Color(0xFF30363D) else Color(0xFF24292F)), Modifier.weight(1f), p, onClone)
+                        ActionTile("Codriod AI", ToolIcon.CodeBrackets, Brush.linearGradient(listOf(p.primary2, p.accent)), Modifier.weight(1f), p) { model.agentOpen = true }
+                    }
+                }
+                model.continueInfo?.takeIf { query.isBlank() }?.let { info ->
+                    item { SectionHeader("CONTINUE", p) }
+                    item { ContinueCard(info, p, onOpen = { model.openProject(info.project) }) }
+                }
+                item {
+                    SectionHeader("PROJECTS", p, trailing = if (filtered.size > 6 && query.isBlank()) (if (showAll) "Show less" else "See all") else null) { showAll = !showAll }
+                    Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("All" to model.projects.size, "Phone" to null, "GitHub" to null, "Folders" to null).forEach { (label, count) ->
+                            val on = filter == label
+                            val shape = RoundedCornerShape(14.dp)
+                            Text(if (count != null) "$label $count" else label, fontSize = 12.sp,
+                                color = if (on) Color.White else p.muted,
+                                modifier = Modifier.clip(shape)
+                                    .background(if (on) Brush.horizontalGradient(listOf(p.primary, p.primary2)) else SolidColor(p.glass))
+                                    .border(1.dp, if (on) Color.Transparent else p.border, shape)
+                                    .clickable { filter = label }.padding(horizontal = 12.dp, vertical = 6.dp))
+                        }
+                    }
+                }
+                if (shown.isEmpty()) item {
+                    Text(if (query.isNotBlank()) "No projects match “$query”." else "No projects here yet.",
+                        Modifier.padding(20.dp), color = p.muted)
+                }
+                items(shown, key = { it.id }) { project ->
+                    ProjectRow(project, p, onClick = { model.openProject(project) }, onRename = { rename = project }, onDelete = { delete = project })
+                }
             }
-            if (shown.isEmpty()) item {
-                Text(if (query.isNotBlank()) "No projects match “$query”." else "No projects here yet.", Modifier.padding(20.dp), color = muted)
-            }
-            items(shown, key = { it.id }) { project ->
-                ProjectRow(project, onClick = { model.openProject(project) }, onRename = { rename = project }, onDelete = { delete = project })
-            }
+            GradientFab(p, onNew, Modifier.align(Alignment.BottomEnd).padding(18.dp))
         }
-        ExtendedFloatingActionButton(onClick = onNew, containerColor = Blue, contentColor = Color.White,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(18.dp),
-            icon = { ToolGlyph(ToolIcon.Plus, Color.White, Modifier.size(18.dp)) }, text = { Text("New project", fontWeight = FontWeight.SemiBold) })
     }
-    rename?.let { p -> WorkspaceNameDialog("Rename project", "Rename", p.name, onDismiss = { rename = null }) { rename = null; model.renameProject(p, it) } }
-    delete?.let { p ->
+    rename?.let { project -> WorkspaceNameDialog("Rename project", "Rename", project.name, onDismiss = { rename = null }) { rename = null; model.renameProject(project, it) } }
+    delete?.let { project ->
         AlertDialog(onDismissRequest = { delete = null },
-            title = { Text("Delete “${p.name}”?") },
-            text = { Text(if (p.treeUri != null) "Codriod forgets this folder. The files on your phone are not deleted."
+            title = { Text("Delete “${project.name}”?") },
+            text = { Text(if (project.treeUri != null) "Codriod forgets this folder. The files on your phone are not deleted."
                 else "All files of this project are permanently deleted from this phone" +
-                    (p.path?.let { " (${StorageAccess.displayPath(java.io.File(it))})" } ?: "") + ".") },
-            confirmButton = { TextButton(onClick = { delete = null; model.deleteProject(p) }) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
+                    (project.path?.let { " (${StorageAccess.displayPath(java.io.File(it))})" } ?: "") + ".") },
+            confirmButton = { TextButton(onClick = { delete = null; model.deleteProject(project) }) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
             dismissButton = { TextButton(onClick = { delete = null }) { Text("Cancel") } })
     }
 }
 
 @Composable
-private fun ActionTile(label: String, icon: ToolIcon, brush: Brush, modifier: Modifier, onClick: () -> Unit) {
-    Column(modifier.clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surface).clickable(onClick = onClick)
-        .padding(top = 12.dp, bottom = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(brush), contentAlignment = Alignment.Center) {
-            ToolGlyph(icon, Color.White, Modifier.size(20.dp))
+private fun ActionTile(label: String, icon: ToolIcon, brush: Brush, modifier: Modifier, p: HomePalette, onClick: () -> Unit) {
+    Column(modifier.heightIn(min = 96.dp).glass(p, RoundedCornerShape(18.dp), elevated = false).clickable(onClick = onClick)
+        .padding(vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Box(Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(brush), contentAlignment = Alignment.Center) {
+            ToolGlyph(icon, Color.White, Modifier.size(19.dp))
         }
         Spacer(Modifier.height(7.dp))
-        Text(label, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(label, color = p.text, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
 @Composable
-private fun SectionHeader(title: String, trailing: String? = null, onTrailing: () -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 10.dp, top = 16.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun SectionHeader(title: String, p: HomePalette, trailing: String? = null, onTrailing: () -> Unit = {}) {
+    Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 10.dp, top = 16.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(title, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-        if (trailing != null) TextButton(onClick = onTrailing, contentPadding = PaddingValues(horizontal = 8.dp)) { Text(trailing, fontSize = 12.sp, color = Blue2) }
+            color = p.muted, modifier = Modifier.weight(1f))
+        if (trailing != null) TextButton(onClick = onTrailing, contentPadding = PaddingValues(horizontal = 8.dp)) {
+            Text(trailing, fontSize = 12.sp, color = p.primary)
+        }
     }
 }
 
 @Composable
-private fun ContinueCard(info: WorkspaceModel.ContinueInfo, onOpen: () -> Unit) {
-    Row(Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp))
-        .background(Brush.linearGradient(listOf(Color(0xFF0D3A5C), Color(0xFF25234A))))
-        .border(1.dp, Color(0xFF1D4F78), RoundedCornerShape(16.dp)).clickable(onClick = onOpen).padding(14.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.size(54.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFFF5F8FC)).padding(7.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Box(Modifier.fillMaxWidth(.6f).height(5.dp).background(Blue, RoundedCornerShape(3.dp)))
-            repeat(3) { i -> Box(Modifier.fillMaxWidth(listOf(1f, .7f, .5f)[i]).height(5.dp).background(Color(0xFFCFD8E3), RoundedCornerShape(3.dp))) }
+private fun ContinueCard(info: WorkspaceModel.ContinueInfo, p: HomePalette, onOpen: () -> Unit) {
+    val shape = RoundedCornerShape(20.dp)
+    Row(Modifier.padding(horizontal = 16.dp).fillMaxWidth().shadow(16.dp, shape, ambientColor = p.shadow, spotColor = p.shadow)
+        .clip(shape).background(Brush.linearGradient(listOf(p.primary.copy(alpha = 0.14f), p.glassStrong, p.primary2.copy(alpha = 0.12f))))
+        .border(1.dp, p.border, shape).clickable(onClick = onOpen).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.size(54.dp).clip(RoundedCornerShape(14.dp)).background(p.glassStrong).padding(7.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(Modifier.fillMaxWidth(.6f).height(5.dp).background(p.primary, RoundedCornerShape(3.dp)))
+            repeat(3) { i ->
+                Box(Modifier.fillMaxWidth(listOf(1f, .7f, .5f)[i]).height(5.dp).background(p.muted.copy(alpha = 0.35f), RoundedCornerShape(3.dp)))
+            }
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(info.project.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(info.project.name, color = p.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text((info.file?.substringAfterLast('/')?.let { "$it · " } ?: "") + "edited ${relativeTime(info.project.modified)}",
-                color = Color(0xFFA9C3DD), fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                color = p.muted, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             info.branch?.let { branch ->
-                Text("● $branch · ${if (info.changes == 0) "clean" else "${info.changes} changes"}", color = Color(0xFF89D185), fontSize = 11.5.sp)
+                Text("● $branch · ${if (info.changes == 0) "clean" else "${info.changes} changes"}", color = p.success, fontSize = 11.5.sp)
             }
         }
         Spacer(Modifier.width(8.dp))
-        Text("Open", color = Color(0xFF0B3556), fontWeight = FontWeight.Bold, fontSize = 12.5.sp,
-            modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(Color.White).clickable(onClick = onOpen).padding(horizontal = 14.dp, vertical = 8.dp))
+        Text("Open", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.5.sp,
+            modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(Brush.horizontalGradient(listOf(p.primary, p.primary2)))
+                .clickable(onClick = onOpen).padding(horizontal = 14.dp, vertical = 8.dp))
     }
 }
 
@@ -290,30 +430,33 @@ private fun initials(name: String): String {
 }
 
 @Composable
-private fun ProjectRow(project: Project, onClick: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit) {
+private fun ProjectRow(project: Project, p: HomePalette, onClick: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val tag = when {
         project.treeUri != null -> "Folder"
         project.template == "Git" -> "GitHub"
         else -> project.template
     }
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(start = 18.dp, end = 6.dp, top = 9.dp, bottom = 9.dp),
+    Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp).fillMaxWidth().glass(p, RoundedCornerShape(18.dp), elevated = false)
+        .clickable(onClick = onClick).padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(40.dp).clip(RoundedCornerShape(11.dp)).background(projectColor(project)), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp))
+            .background(Brush.linearGradient(listOf(projectColor(project), projectColor(project).copy(alpha = 0.72f)))),
+            contentAlignment = Alignment.Center) {
             Text(initials(project.name), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(project.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(project.name, color = p.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(tag, fontSize = 9.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(5.dp)).padding(horizontal = 6.dp, vertical = 1.dp))
+                Text(tag, fontSize = 9.5.sp, color = p.muted,
+                    modifier = Modifier.border(1.dp, p.border, RoundedCornerShape(5.dp)).padding(horizontal = 6.dp, vertical = 1.dp))
                 Spacer(Modifier.width(7.dp))
-                Text(relativeTime(project.modified), fontSize = 11.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                Text(relativeTime(project.modified), fontSize = 11.5.sp, color = p.muted, maxLines = 1)
             }
         }
         Box {
-            IconButton(onClick = { menu = true }) { ToolGlyph(ToolIcon.More, MaterialTheme.colorScheme.onSurfaceVariant, Modifier.size(18.dp)) }
+            IconButton(onClick = { menu = true }) { ToolGlyph(ToolIcon.More, p.muted, Modifier.size(18.dp)) }
             DropdownMenu(menu, { menu = false }) {
                 DropdownMenuItem({ Text("Open") }, { menu = false; onClick() })
                 DropdownMenuItem({ Text("Rename") }, { menu = false; onRename() })
@@ -325,74 +468,157 @@ private fun ProjectRow(project: Project, onClick: () -> Unit, onRename: () -> Un
 
 @Composable
 private fun FirstRun(model: WorkspaceModel, onNew: (String?) -> Unit, onOpenFolder: () -> Unit, onClone: () -> Unit, onOpenTerminal: () -> Unit) {
+    val p = LocalHomePalette.current
     Column(Modifier.fillMaxSize()) {
         TopBar(model, onOpenTerminal)
         StorageBanner(model)
-        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 26.dp),
-            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-            Spacer(Modifier.height(20.dp))
-            Box(Modifier.size(170.dp, 124.dp)) {
-                Column(Modifier.size(150.dp, 110.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(Color(0xFF569CD6) to .55f, Color(0xFFCE9178) to .8f, Color(0xFF4EC9B0) to .4f, Color(0xFF3A3A3F) to .65f).forEach { (c, w) ->
-                        Box(Modifier.fillMaxWidth(w).height(7.dp).background(c, RoundedCornerShape(4.dp)))
-                    }
-                }
-                Box(Modifier.align(Alignment.BottomEnd).size(48.dp).shadow(10.dp, RoundedCornerShape(14.dp)).clip(RoundedCornerShape(14.dp)).background(Blue),
-                    contentAlignment = Alignment.Center) { ToolGlyph(ToolIcon.Plus, Color.White, Modifier.size(22.dp)) }
-            }
-            Spacer(Modifier.height(18.dp))
-            Text("Code. Build. Run. Anywhere.", fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-            Text("Create your first project, open a folder from your phone, or bring your code from GitHub.",
-                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp, bottom = 18.dp))
-            BigButton("New project", ToolIcon.Plus, primary = true) { onNew(null) }
-            BigButton("Open folder", ToolIcon.Folder, primary = false, onOpenFolder)
-            BigButton("Clone from GitHub", ToolIcon.Git, primary = false, onClone)
-            Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("🌐 Website" to "Web", "⚡ Shell" to "Shell", "📄 Empty" to "Empty").forEach { (label, template) ->
-                    Text(label, fontSize = 11.5.sp, modifier = Modifier.clip(RoundedCornerShape(9.dp)).background(MaterialTheme.colorScheme.surface)
-                        .clickable { onNew(template) }.padding(horizontal = 10.dp, vertical = 6.dp))
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(Modifier.widthIn(max = 520.dp).fillMaxWidth().padding(top = 10.dp, bottom = 22.dp),
+                horizontalAlignment = Alignment.CenterHorizontally) {
+                CodingIllustration(p)
+                Spacer(Modifier.height(18.dp))
+                Text("Code. Build. Run. Anywhere.", fontSize = 30.sp, fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.Center,
+                    lineHeight = 36.sp, color = p.text)
+                Text("Create your first project, open a folder from your phone, or bring your code from GitHub.",
+                    fontSize = 13.5.sp, color = p.muted, textAlign = TextAlign.Center, lineHeight = 20.sp,
+                    modifier = Modifier.padding(top = 10.dp, bottom = 22.dp))
+                GradientButton("New project", ToolIcon.Plus, p) { onNew(null) }
+                Spacer(Modifier.height(10.dp))
+                GlassActionButton("Open folder", ToolIcon.Folder, p, p.success, onOpenFolder)
+                Spacer(Modifier.height(10.dp))
+                GlassActionButton("Clone from GitHub", ToolIcon.Git, p, p.primary, onClone)
+                Spacer(Modifier.height(14.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    QuickAction("Website", ToolIcon.Globe, p, p.primary, Modifier.weight(1f)) { onNew("Web") }
+                    QuickAction("Shell", ToolIcon.Terminal, p, p.accent, Modifier.weight(1f)) { onNew("Shell") }
+                    QuickAction("Empty", ToolIcon.File, p, p.primary2, Modifier.weight(1f)) { onNew("Empty") }
                 }
             }
-            Spacer(Modifier.height(20.dp))
         }
-        Row(Modifier.padding(16.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, Color(0xFF33334A), RoundedCornerShape(16.dp)).clickable { model.agentOpen = true }.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(AgentBrush), contentAlignment = Alignment.Center) {
-                ToolGlyph(ToolIcon.CodeBrackets, Color.White, Modifier.size(18.dp))
+        AgentCard(p) { model.agentOpen = true }
+    }
+}
+
+@Composable
+internal fun CodingIllustration(p: HomePalette) {
+    BoxWithConstraints(Modifier.fillMaxWidth().height(172.dp), contentAlignment = Alignment.Center) {
+        val cardWidth = minOf(maxWidth * 0.82f, 260.dp)
+        Box(Modifier.size(150.dp).background(
+            Brush.radialGradient(listOf(p.primary.copy(alpha = 0.18f), Color.Transparent)), CircleShape))
+        Column(Modifier.width(cardWidth).height(150.dp).glass(p, RoundedCornerShape(24.dp)).padding(16.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(p.primary, p.accent, p.primary2).forEach { color ->
+                    Box(Modifier.size(7.dp).background(color, CircleShape))
+                }
             }
-            Spacer(Modifier.width(12.dp))
-            Column {
-                Text("Codriod Agent", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Text("Add your AI key in Add-ons to build with AI.", fontSize = 11.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(14.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                CodeLine(p.primary, 0.62f)
+                CodeLine(p.accent, 0.82f, 12.dp)
+                CodeLine(p.primary2, 0.48f, 12.dp)
+                CodeLine(p.muted.copy(alpha = 0.35f), 0.70f)
             }
+        }
+        Box(Modifier.align(Alignment.BottomEnd).offset(x = (-18).dp, y = (-6).dp).size(58.dp)
+            .shadow(18.dp, RoundedCornerShape(18.dp), ambientColor = p.primary.copy(alpha = 0.35f), spotColor = p.primary2.copy(alpha = 0.35f))
+            .clip(RoundedCornerShape(18.dp)).background(Brush.linearGradient(listOf(p.primary, p.primary2))),
+            contentAlignment = Alignment.Center) {
+            ToolGlyph(ToolIcon.Plus, Color.White, Modifier.size(26.dp))
         }
     }
 }
 
 @Composable
-private fun BigButton(text: String, icon: ToolIcon, primary: Boolean, onClick: () -> Unit) {
-    Row(Modifier.padding(bottom = 9.dp).fillMaxWidth().height(48.dp).clip(RoundedCornerShape(13.dp))
-        .background(if (primary) Blue else MaterialTheme.colorScheme.surface)
-        .border(if (primary) 0.dp else 1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(13.dp))
-        .clickable(onClick = onClick), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-        ToolGlyph(icon, if (primary) Color.White else MaterialTheme.colorScheme.onSurface, Modifier.size(18.dp))
-        Spacer(Modifier.width(9.dp))
-        Text(text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = if (primary) Color.White else MaterialTheme.colorScheme.onSurface)
+private fun CodeLine(color: Color, fraction: Float, indent: Dp = 0.dp) {
+    Box(Modifier.fillMaxWidth().padding(start = indent)) {
+        Box(Modifier.fillMaxWidth(fraction).height(8.dp).background(color, RoundedCornerShape(4.dp)))
     }
 }
 
-/** Bottom sheet with big starter cards. "From GitHub" opens the GitHub screen. */
+@Composable
+private fun GradientButton(text: String, icon: ToolIcon, p: HomePalette, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(17.dp)
+    Row(Modifier.fillMaxWidth().height(56.dp)
+        .shadow(18.dp, shape, ambientColor = p.primary.copy(alpha = 0.30f), spotColor = p.primary2.copy(alpha = 0.30f))
+        .clip(shape).background(Brush.horizontalGradient(listOf(p.primary, p.primary2))).clickable(onClick = onClick)
+        .padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(34.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
+            ToolGlyph(icon, Color.White, Modifier.size(18.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(text, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        ToolGlyph(ToolIcon.Chevron, Color.White.copy(alpha = 0.9f), Modifier.size(16.dp))
+    }
+}
+
+@Composable
+private fun GlassActionButton(text: String, icon: ToolIcon, p: HomePalette, tint: Color, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(17.dp)
+    Row(Modifier.fillMaxWidth().height(54.dp).glass(p, shape).clickable(onClick = onClick).padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(tint.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+            ToolGlyph(icon, tint, Modifier.size(19.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(text, color = p.text, fontWeight = FontWeight.SemiBold, fontSize = 14.5.sp, modifier = Modifier.weight(1f))
+        ToolGlyph(ToolIcon.Chevron, p.muted, Modifier.size(16.dp))
+    }
+}
+
+@Composable
+private fun QuickAction(label: String, icon: ToolIcon, p: HomePalette, tint: Color, modifier: Modifier, onClick: () -> Unit) {
+    Column(modifier.height(82.dp).glass(p, RoundedCornerShape(18.dp), elevated = false).clickable(onClick = onClick)
+        .padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Box(Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(tint.copy(alpha = 0.14f)), contentAlignment = Alignment.Center) {
+            ToolGlyph(icon, tint, Modifier.size(18.dp))
+        }
+        Spacer(Modifier.height(7.dp))
+        Text(label, color = p.text, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun AgentCard(p: HomePalette, onClick: () -> Unit) {
+    Row(Modifier.padding(horizontal = 18.dp, vertical = 10.dp).fillMaxWidth().glass(p, RoundedCornerShape(22.dp))
+        .clickable(onClick = onClick).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(46.dp).clip(RoundedCornerShape(15.dp)).background(Brush.linearGradient(listOf(p.primary, p.primary2))),
+            contentAlignment = Alignment.Center) {
+            ToolGlyph(ToolIcon.CodeBrackets, Color.White, Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Codriod Agent", color = p.text, fontWeight = FontWeight.SemiBold, fontSize = 14.5.sp)
+            Text("Add your AI key in Add-ons to build with AI.", color = p.muted, fontSize = 11.5.sp, lineHeight = 15.sp)
+        }
+        Box(Modifier.size(34.dp).clip(CircleShape).background(p.primary.copy(alpha = 0.10f)), contentAlignment = Alignment.Center) {
+            ToolGlyph(ToolIcon.Chevron, p.primary, Modifier.size(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun GradientFab(p: HomePalette, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(18.dp)
+    Row(modifier.shadow(18.dp, shape, ambientColor = p.primary.copy(alpha = 0.35f), spotColor = p.primary2.copy(alpha = 0.35f))
+        .clip(shape).background(Brush.horizontalGradient(listOf(p.primary, p.primary2))).clickable(onClick = onClick)
+        .padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        ToolGlyph(ToolIcon.Plus, Color.White, Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("New project", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NewProjectSheet(initial: String, onDismiss: () -> Unit, onGitHub: () -> Unit, onCreate: (String, String) -> Unit) {
+    val p = LocalHomePalette.current
     var name by remember { mutableStateOf("") }
     var template by remember { mutableStateOf(initial) }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = if (p.dark) Color(0xFF121826) else Color.White) {
         Column(Modifier.padding(horizontal = 18.dp).padding(bottom = 26.dp)) {
-            Text("New project", fontSize = 19.sp, fontWeight = FontWeight.Bold)
-            Text("Pick a starter. You can change everything later.", fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Text("New project", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = p.text)
+            Text("Pick a starter. You can change everything later.", fontSize = 12.5.sp, color = p.muted,
                 modifier = Modifier.padding(top = 4.dp, bottom = 14.dp))
             OutlinedTextField(name, { name = it.take(64) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                 placeholder = { Text("my-new-site") }, shape = RoundedCornerShape(12.dp))
@@ -403,20 +629,21 @@ private fun NewProjectSheet(initial: String, onDismiss: () -> Unit, onGitHub: ()
                 Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     row.forEach { (key, title, sub) ->
                         val on = template == key
-                        Column(Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
-                            .background(if (on) Color(0xFF0B3A5E) else MaterialTheme.colorScheme.background)
-                            .border(if (on) 1.5.dp else 1.dp, if (on) Blue else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+                        val shape = RoundedCornerShape(16.dp)
+                        Column(Modifier.weight(1f).clip(shape)
+                            .background(if (on) p.primary.copy(alpha = 0.12f) else p.glass)
+                            .border(if (on) 1.5.dp else 1.dp, if (on) p.primary else p.border, shape)
                             .clickable { if (key == "GitHub") onGitHub() else template = key }.padding(14.dp)) {
                             Text(title.substringBefore(' '), fontSize = 22.sp)
                             Text(title.substringAfter(' '), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp),
-                                color = if (on) Color.White else MaterialTheme.colorScheme.onSurface)
-                            Text(sub, fontSize = 11.5.sp, color = if (on) Color(0xFFA9C3DD) else MaterialTheme.colorScheme.onSurfaceVariant)
+                                color = p.text)
+                            Text(sub, fontSize = 11.5.sp, color = p.muted)
                         }
                     }
                 }
             }
-            Button(onClick = { onCreate(name.trim(), template) }, enabled = name.isNotBlank(), modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(13.dp), colors = ButtonDefaults.buttonColors(containerColor = Blue)) {
+            Button(onClick = { onCreate(name.trim(), template) }, enabled = name.isNotBlank(), modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = p.primary, contentColor = Color.White)) {
                 Text("Create project", fontWeight = FontWeight.SemiBold)
             }
         }

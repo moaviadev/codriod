@@ -128,6 +128,7 @@ class WorkspaceTerminalController(private val context: Context, val root: File,
     override fun onTextChanged(changedSession: TerminalSession) { view?.onScreenUpdated() }
     override fun onTitleChanged(changedSession: TerminalSession) {}
     override fun onSessionFinished(finishedSession: TerminalSession) {
+        if (finishedSession !== manager.session) return
         status = "Exited (${finishedSession.exitStatus}) · Restart to continue"
     }
     override fun onCopyTextToClipboard(session: TerminalSession, text: String) {

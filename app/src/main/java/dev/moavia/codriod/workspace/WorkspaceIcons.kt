@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.dp
 enum class ToolIcon {
     Folder, File, Search, Terminal, Preview, Plus, Close, Back, Run,
     Undo, Redo, Theme, Refresh, More, Delete, Edit, Check, Chevron, Git,
-    Settings, Fullscreen, Paste, Copy, Clear, History, Keyboard, CodeBrackets,
+    Settings, Fullscreen, Paste, Copy, Cut, Clear, History, Keyboard, CodeBrackets,
     Globe, Home, Inspect, Lock, Rotate, Star, Share
 }
 
@@ -92,6 +92,12 @@ fun ToolGlyph(kind: ToolIcon, tint: Color = MaterialTheme.colorScheme.onSurface,
                 ToolIcon.Copy -> {
                     drawRoundRect(tint, Offset(7f, 7f), Size(12f, 13f), CornerRadius(2f), style = stroke)
                     path(4f to 16f, 4f to 4f, 16f to 4f)
+                }
+                ToolIcon.Cut -> {
+                    drawCircle(tint, 2.6f, Offset(6f, 6f), style = stroke)
+                    drawCircle(tint, 2.6f, Offset(6f, 18f), style = stroke)
+                    line(8.4f, 7.4f, 20f, 18f)
+                    line(8.4f, 16.6f, 20f, 6f)
                 }
                 ToolIcon.Clear -> {
                     path(6f to 15f, 12f to 9f, 18f to 15f)

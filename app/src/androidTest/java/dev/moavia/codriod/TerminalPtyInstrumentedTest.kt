@@ -1,16 +1,21 @@
 package dev.moavia.codriod
 
 import android.content.Context
+import android.view.View
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
+import com.termux.view.TerminalView
+import dev.moavia.codriod.workspace.WorkspaceTerminalController
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -97,5 +102,99 @@ class TerminalPtyInstrumentedTest {
         session.finishIfRunning()
         assertTrue(client.finished.await(5, TimeUnit.SECONDS))
         assertFalse(session.isRunning)
+    }
+
+    @Test
+    fun restartIgnoresOldSessionExitCallback() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val (controller, view) = createAttachedTerminal(context)
+        try {
+            val oldSession = view.currentSession
+            assertTrue(oldSession.isRunning)
+
+            InstrumentationRegistry.getInstrumentation().runOnMainSync { controller.restart() }
+            val newSession = view.currentSession
+
+            assertNotSame(oldSession, newSession)
+            assertTrue("old session did not exit", waitUntil(5_000) { !oldSession.isRunning })
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+
+            assertEquals("Local shell", statusOnMain(controller))
+            assertTrue(newSession.isRunning)
+
+            val command = "echo __NEW__\$((1+1))__\n".toByteArray(Charsets.UTF_8)
+            newSession.write(command, 0, command.size)
+            assertTrue("new session did not respond", waitUntil(5_000) {
+                transcriptContains(newSession, "__NEW__2__")
+            })
+        } finally {
+            closeOnMain(controller)
+        }
+    }
+
+    @Test
+    fun currentSessionExitStillReportsStatus() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val (controller, view) = createAttachedTerminal(context)
+        try {
+            val session = view.currentSession
+            assertTrue(session.isRunning)
+
+            InstrumentationRegistry.getInstrumentation().runOnMainSync { session.finishIfRunning() }
+            assertTrue("current session did not exit", waitUntil(5_000) { !session.isRunning })
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+
+            assertEquals("Exited (-9) · Restart to continue", statusOnMain(controller))
+        } finally {
+            closeOnMain(controller)
+        }
+    }
+
+    private fun createAttachedTerminal(context: Context): Pair<WorkspaceTerminalController, TerminalView> {
+        val root = File(context.cacheDir, "workspace-terminal-${System.nanoTime()}").apply { mkdirs() }
+        val controller = WorkspaceTerminalController(context, root)
+        val viewHolder = AtomicReference<TerminalView>()
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            val view = TerminalView(context, null).apply {
+                setTerminalViewClient(controller)
+                setTextSize(24)
+                measure(
+                    View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(600, View.MeasureSpec.EXACTLY)
+                )
+                layout(0, 0, 800, 600)
+            }
+            controller.attach(view)
+            viewHolder.set(view)
+        }
+        return controller to viewHolder.get()
+    }
+
+    private fun statusOnMain(controller: WorkspaceTerminalController): String {
+        val holder = AtomicReference<String>()
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { holder.set(controller.status) }
+        return holder.get()
+    }
+
+    private fun transcriptContains(session: TerminalSession, text: String): Boolean {
+        val holder = AtomicReference(false)
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            holder.set(session.emulator?.screen?.transcriptText?.contains(text) == true)
+        }
+        return holder.get()
+    }
+
+    private fun waitUntil(timeoutMs: Long, condition: () -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            if (condition()) return true
+            Thread.sleep(20)
+        }
+        return condition()
+    }
+
+    private fun closeOnMain(controller: WorkspaceTerminalController) {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { controller.close() }
     }
 }
