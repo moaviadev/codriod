@@ -218,7 +218,8 @@ data class ProotSpec(
     }
 
     companion object {
-        const val PATH = "/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.local/bin"
+        // /opt/jdk, /opt/kotlin and /opt/gradle hold the Java & Kotlin add-on's tools (when installed)
+        const val PATH = "/opt/node/bin:/opt/jdk/bin:/opt/kotlin/bin:/opt/gradle/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.local/bin"
         val DEFAULT_ENV = linkedMapOf(
             "HOME" to "/root", "USER" to "root", "LOGNAME" to "root", "SHELL" to "/bin/bash",
             "PATH" to PATH, "LANG" to "C.UTF-8", "LC_ALL" to "C.UTF-8", "TERM" to "xterm-256color", "COLORTERM" to "truecolor",

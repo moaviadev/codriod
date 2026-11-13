@@ -65,6 +65,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         private set
     var message by mutableStateOf<String?>(null)
     var terminalOpen by mutableStateOf(false)
+    var terminalFullscreen by mutableStateOf(false)
     var previewOpen by mutableStateOf(false)
     var fileSheet by mutableStateOf(false)
     var searchSheet by mutableStateOf(false)
@@ -87,6 +88,14 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     val linux = dev.moavia.codriod.linux.LinuxEnvironment(application, viewModelScope)
     /** Add-ons → Linux & AI CLIs screen. */
     var linuxOpen by mutableStateOf(false)
+    /** Add-ons → Java & Kotlin: JDK, Kotlin compiler and Gradle inside Ubuntu. */
+    val javaKit = dev.moavia.codriod.jdk.JavaKitEnvironment(application, viewModelScope, linux)
+    /** Add-ons → Java & Kotlin screen. */
+    var javaOpen by mutableStateOf(false)
+    /** Add-ons → More extensions: language servers, debuggers, editor themes. */
+    val extensions = dev.moavia.codriod.ext.ExtensionsManager(application, viewModelScope, linux, javaKit)
+    /** Add-ons → More extensions screen. */
+    var extensionsOpen by mutableStateOf(false)
     /** Vertical position of the editor-edge tabs (dp from the centre), dragged by the user. */
     var edgeOffset by mutableFloatStateOf(application.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE).getFloat("edge_offset", -40f))
         private set
@@ -370,6 +379,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
             ?.takeIf { path -> documents.any { it.path == path } } ?: documents.firstOrNull()?.path
         prefs.edit().putString("last_project", selected.id).apply()
         terminalOpen = false
+        terminalFullscreen = false
         previewOpen = false
         gitOpen = false
         gitSnapshot = GitSnapshot()
@@ -398,6 +408,7 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
         activePath = null
         previewOpen = false
         terminalOpen = false
+        terminalFullscreen = false
         gitOpen = false
         addonsOpen = false
         agentOpen = false
@@ -740,6 +751,12 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
             if (linux.ready) dev.moavia.codriod.linux.UbuntuShellBackend(linux, ::projectMount) else null
         }
         terminalOpen = true
+    }
+
+    /** Opens the same terminal controller as a full-screen page, keeping every tab and session. */
+    fun showTerminalFullscreen() {
+        showTerminal()
+        if (project != null) terminalFullscreen = true
     }
 
     /** Opens a CLI's chat panel (Codex, Copilot, Gemini…); CLIs without a chat mode open in the terminal. */

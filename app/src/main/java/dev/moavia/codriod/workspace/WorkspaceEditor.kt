@@ -1,6 +1,11 @@
 package dev.moavia.codriod.workspace
 
 import android.view.KeyEvent as AndroidKeyEvent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
@@ -49,6 +54,7 @@ fun WorkspaceEditor(model: WorkspaceModel) {
     val project = model.project ?: return
     val code = LocalCodeColors.current
     val density = LocalDensity.current
+    val imeVisible = WindowInsets.ime.getBottom(density) > 0
     var sheetFraction by remember(project.id) { mutableFloatStateOf(0.36f) }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         EditorToolbar(model)
@@ -58,41 +64,35 @@ fun WorkspaceEditor(model: WorkspaceModel) {
             Column(Modifier.fillMaxSize()) {
                 val active = model.activeDocument
                 if (active != null && active.image) ImageViewer(model, active, Modifier.weight(1f))
-                else { CodeEditor(model, Modifier.weight(1f)); CodingKeys(model) }
-                Row(Modifier.fillMaxWidth().height(31.dp).background(code.header)
-                    .clickable { if (model.terminalOpen) model.terminalOpen = false else model.showTerminal() },
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (model.terminalOpen) "⌄" else "›", Modifier.padding(start = 12.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(8.dp))
-                    ToolGlyph(ToolIcon.Terminal, if (model.terminalOpen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Terminal", style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.width(8.dp))
-                    Text(model.terminal?.status ?: "sh · local",
-                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f), maxLines = 1)
-                    TextButton(onClick = { if (model.terminalOpen) model.terminal?.restart() else model.showTerminal() },
-                        contentPadding = PaddingValues(horizontal = 8.dp)) {
-                        Text(if (model.terminalOpen) "Restart" else "Open")
-                    }
-                }
-                if (model.terminalOpen) {
+                else { CodeEditor(model, Modifier.weight(1f)); if (!imeVisible) CodingKeys(model) }
+                TerminalPanelHeader(model)
+                AnimatedVisibility(
+                    visible = model.terminalOpen,
+                    enter = expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
+                    exit = shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut()
+                ) {
                     BoxWithConstraints {
                         val availableHeight = maxHeight
-                        val allowedHeight = (availableHeight * sheetFraction).coerceAtLeast(140.dp)
+                        val maximized = model.terminal?.maximized == true
+                        val allowedHeight = if (maximized) availableHeight
+                            else (availableHeight * sheetFraction)
+                                .coerceAtLeast(if (imeVisible) 160.dp else 140.dp)
+                                .coerceAtMost(availableHeight)
                         Column(Modifier.fillMaxWidth().height(allowedHeight)) {
-                            Box(Modifier.fillMaxWidth().height(18.dp).background(code.header)
-                                .pointerInput(availableHeight) {
+                            if (!maximized) Box(Modifier.fillMaxWidth().height(20.dp)
+                                .background(code.header)
+                                .pointerInput(boxHeightPx) {
                                     detectVerticalDragGestures { _, drag ->
                                         if (boxHeightPx > 0) {
                                             val fraction = with(density) { drag.toDp().value / with(density) { boxHeightPx.toDp().value } }
                                             sheetFraction = (sheetFraction - fraction).coerceIn(0.23f, 0.62f)
                                         }
                                     }
-                                }, contentAlignment = Alignment.Center) {
-                                Box(Modifier.width(34.dp).height(3.dp).clip(RoundedCornerShape(3.dp))
-                                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)))
+                                }
+                                .semantics { contentDescription = "Resize terminal panel" },
+                                contentAlignment = Alignment.Center) {
+                                Box(Modifier.width(44.dp).height(4.dp).clip(RoundedCornerShape(4.dp))
+                                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)))
                             }
                             model.terminal?.let { WorkspaceTerminal(it, Modifier.fillMaxSize()) }
                         }
@@ -100,6 +100,71 @@ fun WorkspaceEditor(model: WorkspaceModel) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TerminalPanelHeader(model: WorkspaceModel) {
+    val code = LocalCodeColors.current
+    val open = model.terminalOpen
+    val controller = model.terminal
+    val tab = controller?.activeTab
+    val status = controller?.let { terminalStatusText(it.activeTab) } ?: "Ready"
+    val profile = controller?.activeProfileLabel ?: "Local Shell"
+    val shell = controller?.activeShellName ?: "sh"
+    Column(Modifier.fillMaxWidth().background(code.header)) {
+        Row(Modifier.fillMaxWidth().height(44.dp)
+            .clickable { if (open) model.terminalOpen = false else model.showTerminal() }
+            .padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(28.dp).clip(RoundedCornerShape(8.dp))
+                .background(if (open) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center) {
+                ToolGlyph(ToolIcon.Terminal,
+                    if (open) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    Modifier.size(16.dp))
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Terminal", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                    if (open) {
+                        Spacer(Modifier.width(7.dp))
+                        TerminalStatusDot(tab)
+                    }
+                }
+                Text(if (open) "$profile \u00b7 $shell \u00b7 $status" else "Tap to open the terminal",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (open) {
+                TerminalHeaderAction(ToolIcon.Fullscreen, "Open full-screen terminal") { model.showTerminalFullscreen() }
+                TerminalHeaderAction(ToolIcon.Refresh, "Restart terminal") { model.terminal?.restart() }
+                TerminalHeaderAction(ToolIcon.Chevron, "Hide terminal panel", rotation = 90f) {
+                    model.terminalOpen = false
+                }
+            } else {
+                Text("Open", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(4.dp))
+                ToolGlyph(ToolIcon.Chevron, MaterialTheme.colorScheme.primary, Modifier.size(14.dp))
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f))
+    }
+}
+
+@Composable
+private fun TerminalHeaderAction(
+    icon: ToolIcon,
+    description: String,
+    rotation: Float = 0f,
+    onClick: () -> Unit
+) {
+    Box(Modifier.size(34.dp).clip(RoundedCornerShape(9.dp)).clickable(onClick = onClick)
+        .semantics { contentDescription = description }, contentAlignment = Alignment.Center) {
+        ToolGlyph(icon, MaterialTheme.colorScheme.onSurfaceVariant,
+            Modifier.size(16.dp).rotate(rotation))
     }
 }
 

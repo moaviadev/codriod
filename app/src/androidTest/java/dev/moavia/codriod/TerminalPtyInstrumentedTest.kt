@@ -150,6 +150,25 @@ class TerminalPtyInstrumentedTest {
         }
     }
 
+    @Test
+    fun softKeyboardInputReachesTheShell() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val (controller, view) = createAttachedTerminal(context)
+        try {
+            val session = view.currentSession
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                view.requestFocus()
+                "pwd".forEach { view.inputCodePoint(0, it.code, false, false) }
+                view.inputCodePoint(0, '\n'.code, false, false)
+            }
+            assertTrue("shell did not receive typed command", waitUntil(8_000) {
+                transcriptContains(session, "pwd") && transcriptContains(session, "projects/Codriod")
+            })
+        } finally {
+            closeOnMain(controller)
+        }
+    }
+
     private fun createAttachedTerminal(context: Context): Pair<WorkspaceTerminalController, TerminalView> {
         val root = File(context.cacheDir, "workspace-terminal-${System.nanoTime()}").apply { mkdirs() }
         val controller = WorkspaceTerminalController(context, root)

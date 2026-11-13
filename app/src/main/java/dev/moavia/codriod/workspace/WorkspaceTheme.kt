@@ -10,6 +10,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.moavia.codriod.ext.EditorTheme
 
 @Immutable
 data class CodeColors(val header: Color, val selection: Color, val keyword: Color,
@@ -22,7 +23,7 @@ val LocalCodeColors = staticCompositionLocalOf {
 }
 
 @Composable
-fun WorkspaceTheme(mode: String = "System", content: @Composable () -> Unit) {
+fun WorkspaceTheme(mode: String = "System", editorTheme: EditorTheme? = null, content: @Composable () -> Unit) {
     val dark = when (mode) { "Dark" -> true; "Light" -> false; else -> isSystemInDarkTheme() }
     val colors = if (dark) darkColorScheme(
         primary = Color(0xFF007ACC), onPrimary = Color.White,
@@ -43,7 +44,7 @@ fun WorkspaceTheme(mode: String = "System", content: @Composable () -> Unit) {
         outline = Color(0xFF8A8A8A), outlineVariant = Color(0xFFD4D4D4),
         error = Color(0xFFB00020), surfaceContainer = Color(0xFFECECEC)
     )
-    val code = if (dark) LocalCodeColors.current else CodeColors(
+    val code = editorTheme?.code ?: if (dark) LocalCodeColors.current else CodeColors(
         Color(0xFFECECEC), Color(0xFFD6EBFF), Color(0xFF0000FF),
         Color(0xFFA31515), Color(0xFF008000), Color(0xFF137333), false,
         number = Color(0xFF098658), tag = Color(0xFF800000))

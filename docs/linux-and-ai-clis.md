@@ -94,7 +94,8 @@ The agent knows the Ubuntu environment and has these tools:
 ## How it works
 
 - Android 10 and later don't let apps run programs from their data folder. So proot, Termux's Android build, ships
-  inside the APK as `libproot.so`, in the native library folder Android allows. The GitHub build downloads it with
+  inside the APK as `libproot.so`, in the native library folder Android allows. Every build fetches it: locally the
+  Gradle `fetchProot` task runs before each build (any OS, no Linux tools needed); the GitHub build uses
   `scripts/fetch-proot.sh`.
 - proot runs the Ubuntu base system unpacked in the app's private storage. Codriod writes these files for it:
   - fake `/proc` files where Android hides the real ones

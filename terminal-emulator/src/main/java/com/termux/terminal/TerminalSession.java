@@ -13,6 +13,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
@@ -56,6 +57,19 @@ public final class TerminalSession extends TerminalOutput {
     /** The pid of the shell process. 0 if not started and -1 if finished running. */
     int mShellPid;
 
+    /** Set for sessions backed by a remote stream (SSH) instead of a local subprocess. */
+    private boolean mRemote;
+    private InputStream mRemoteInput;
+    private OutputStream mRemoteOutput;
+    private Runnable mRemoteTerminate;
+    private RemoteResizeListener mRemoteResizeListener;
+    private volatile int mRemoteExitStatus = 0;
+
+    /** Lets a remote transport (SSH) resize its pseudo-terminal when the view size changes. */
+    public interface RemoteResizeListener {
+        void onResize(int columns, int rows, int cellWidthPixels, int cellHeightPixels);
+    }
+
     /** The exit status of the shell process. Only valid if ${@link #mShellPid} is -1. */
     int mShellExitStatus;
 
@@ -89,6 +103,38 @@ public final class TerminalSession extends TerminalOutput {
     }
 
     /**
+     * Creates a session that is not backed by a local subprocess. Call {@link #setRemoteIo} before
+     * the terminal is attached so that the emulator reads from and writes to the remote streams.
+     */
+    public TerminalSession(Integer transcriptRows, TerminalSessionClient client) {
+        this(null, null, null, null, transcriptRows, client);
+        this.mRemote = true;
+        this.mShellPid = 0;
+    }
+
+    /**
+     * Wires a remote transport (SSH shell, serial link, ...) to this session. The terminal reads
+     * from {@code input} and forwards user keystrokes to {@code output}. When the transport ends it
+     * should close the streams, which finishes the session; {@code terminate} is invoked by
+     * {@link #finishIfRunning()} to close the underlying connection.
+     */
+    public void setRemoteIo(InputStream input, OutputStream output, Runnable terminate,
+                            RemoteResizeListener resizeListener) {
+        this.mRemote = true;
+        this.mRemoteInput = input;
+        this.mRemoteOutput = output;
+        this.mRemoteTerminate = terminate;
+        this.mRemoteResizeListener = resizeListener;
+        this.mShellPid = 0;
+    }
+
+    /** Posts process-exited handling for a remote transport. Safe to call more than once. */
+    public void remoteFinished(int exitStatus) {
+        mRemoteExitStatus = exitStatus;
+        if (isRunning()) mMainThreadHandler.sendMessage(mMainThreadHandler.obtainMessage(MSG_PROCESS_EXITED, exitStatus));
+    }
+
+    /**
      * @param client The {@link TerminalSessionClient} interface implementation to allow
      *               for communication between {@link TerminalSession} and its client.
      */
@@ -104,7 +150,13 @@ public final class TerminalSession extends TerminalOutput {
         if (mEmulator == null) {
             initializeEmulator(columns, rows, cellWidthPixels, cellHeightPixels);
         } else {
-            JNI.setPtyWindowSize(mTerminalFileDescriptor, rows, columns, cellWidthPixels, cellHeightPixels);
+            if (mRemote) {
+                if (mRemoteResizeListener != null) {
+                    mRemoteResizeListener.onResize(columns, rows, cellWidthPixels, cellHeightPixels);
+                }
+            } else {
+                JNI.setPtyWindowSize(mTerminalFileDescriptor, rows, columns, cellWidthPixels, cellHeightPixels);
+            }
             mEmulator.resize(columns, rows, cellWidthPixels, cellHeightPixels);
         }
     }
@@ -122,6 +174,11 @@ public final class TerminalSession extends TerminalOutput {
      */
     public void initializeEmulator(int columns, int rows, int cellWidthPixels, int cellHeightPixels) {
         mEmulator = new TerminalEmulator(this, columns, rows, cellWidthPixels, cellHeightPixels, mTranscriptRows, mClient);
+
+        if (mRemote) {
+            initializeRemoteIo();
+            return;
+        }
 
         int[] processId = new int[1];
         mTerminalFileDescriptor = JNI.createSubprocess(mShellPath, mCwd, mArgs, mEnv, processId, rows, columns, cellWidthPixels, cellHeightPixels);
@@ -173,10 +230,59 @@ public final class TerminalSession extends TerminalOutput {
 
     }
 
+    /** Starts the reader/writer pumps for a remote transport. No local process is spawned. */
+    private void initializeRemoteIo() {
+        mShellPid = 0;
+        mClient.setTerminalShellPid(this, -1);
+
+        final InputStream remoteIn = mRemoteInput;
+        final OutputStream remoteOut = mRemoteOutput;
+
+        new Thread("TermSessionRemoteReader") {
+            @Override
+            public void run() {
+                if (remoteIn == null) {
+                    mMainThreadHandler.sendMessage(mMainThreadHandler.obtainMessage(MSG_PROCESS_EXITED, 0));
+                    return;
+                }
+                final byte[] buffer = new byte[4096];
+                try {
+                    while (true) {
+                        int read = remoteIn.read(buffer);
+                        if (read == -1) break;
+                        if (!mProcessToTerminalIOQueue.write(buffer, 0, read)) break;
+                        mMainThreadHandler.sendEmptyMessage(MSG_NEW_INPUT);
+                    }
+                } catch (Exception e) {
+                    // Transport closed or failed; treat as end of session.
+                }
+                mMainThreadHandler.sendMessage(mMainThreadHandler.obtainMessage(MSG_PROCESS_EXITED, mRemoteExitStatus));
+            }
+        }.start();
+
+        new Thread("TermSessionRemoteWriter") {
+            @Override
+            public void run() {
+                if (remoteOut == null) return;
+                final byte[] buffer = new byte[4096];
+                try {
+                    while (true) {
+                        int bytesToWrite = mTerminalToProcessIOQueue.read(buffer, true);
+                        if (bytesToWrite == -1) return;
+                        remoteOut.write(buffer, 0, bytesToWrite);
+                        remoteOut.flush();
+                    }
+                } catch (IOException e) {
+                    // Ignore.
+                }
+            }
+        }.start();
+    }
+
     /** Write data to the shell process. */
     @Override
     public void write(byte[] data, int offset, int count) {
-        if (mShellPid > 0) mTerminalToProcessIOQueue.write(data, offset, count);
+        if (mRemote || mShellPid > 0) mTerminalToProcessIOQueue.write(data, offset, count);
     }
 
     /** Write the Unicode code point to the terminal encoded in UTF-8. */
@@ -233,12 +339,19 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Finish this terminal session by sending SIGKILL to the shell. */
     public void finishIfRunning() {
-        if (isRunning()) {
-            try {
-                Os.kill(mShellPid, OsConstants.SIGKILL);
-            } catch (ErrnoException e) {
-                Logger.logWarn(mClient, LOG_TAG, "Failed sending SIGKILL: " + e.getMessage());
+        if (!isRunning()) return;
+        if (mRemote) {
+            Runnable terminate = mRemoteTerminate;
+            if (terminate != null) {
+                try { terminate.run(); } catch (Exception ignored) { }
             }
+            remoteFinished(-1);
+            return;
+        }
+        try {
+            Os.kill(mShellPid, OsConstants.SIGKILL);
+        } catch (ErrnoException e) {
+            Logger.logWarn(mClient, LOG_TAG, "Failed sending SIGKILL: " + e.getMessage());
         }
     }
 
@@ -252,7 +365,16 @@ public final class TerminalSession extends TerminalOutput {
         // Stop the reader and writer threads, and close the I/O streams
         mTerminalToProcessIOQueue.close();
         mProcessToTerminalIOQueue.close();
-        JNI.close(mTerminalFileDescriptor);
+        if (mRemote) {
+            try {
+                if (mRemoteInput != null) mRemoteInput.close();
+            } catch (IOException ignored) { }
+            try {
+                if (mRemoteOutput != null) mRemoteOutput.close();
+            } catch (IOException ignored) { }
+        } else {
+            JNI.close(mTerminalFileDescriptor);
+        }
     }
 
     @Override
@@ -290,12 +412,12 @@ public final class TerminalSession extends TerminalOutput {
     }
 
     public int getPid() {
-        return mShellPid;
+        return mRemote ? -1 : mShellPid;
     }
 
     /** Returns the shell's working directory or null if it was unavailable. */
     public String getCwd() {
-        if (mShellPid < 1) {
+        if (mRemote || mShellPid < 1) {
             return null;
         }
         try {
@@ -347,6 +469,7 @@ public final class TerminalSession extends TerminalOutput {
             }
 
             if (msg.what == MSG_PROCESS_EXITED) {
+                if (!isRunning()) return;
                 int exitCode = (Integer) msg.obj;
                 cleanupResources(exitCode);
 
@@ -361,8 +484,10 @@ public final class TerminalSession extends TerminalOutput {
                 exitDescription += " - press Enter]";
 
                 byte[] bytesToWrite = exitDescription.getBytes(StandardCharsets.UTF_8);
-                mEmulator.append(bytesToWrite, bytesToWrite.length);
-                notifyScreenUpdate();
+                if (mEmulator != null) {
+                    mEmulator.append(bytesToWrite, bytesToWrite.length);
+                    notifyScreenUpdate();
+                }
 
                 mClient.onSessionFinished(TerminalSession.this);
             }

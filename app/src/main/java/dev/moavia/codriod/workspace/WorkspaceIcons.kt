@@ -21,7 +21,7 @@ enum class ToolIcon {
     Folder, File, Search, Terminal, Preview, Plus, Close, Back, Run,
     Undo, Redo, Theme, Refresh, More, Delete, Edit, Check, Chevron, Git,
     Settings, Fullscreen, Paste, Copy, Cut, Clear, History, Keyboard, CodeBrackets,
-    Globe, Home, Inspect, Lock, Rotate, Star, Share
+    Globe, Home, Inspect, Lock, Rotate, Star, Share, Split
 }
 
 @Composable
@@ -48,6 +48,10 @@ fun ToolGlyph(kind: ToolIcon, tint: Color = MaterialTheme.colorScheme.onSurface,
                 ToolIcon.File -> { path(5f to 3f, 14f to 3f, 19f to 8f, 19f to 21f, 5f to 21f, 5f to 3f); path(14f to 3f, 14f to 8f, 19f to 8f) }
                 ToolIcon.Search -> { drawCircle(tint, 6.5f, Offset(10f, 10f), style = stroke); line(15f, 15f, 21f, 21f) }
                 ToolIcon.Terminal -> { path(4f to 6f, 10f to 12f, 4f to 18f); line(12f, 18f, 20f, 18f) }
+                ToolIcon.Split -> {
+                    drawRoundRect(tint, Offset(3f, 4f), Size(8f, 16f), CornerRadius(1.5f), style = stroke)
+                    drawRoundRect(tint, Offset(13f, 4f), Size(8f, 16f), CornerRadius(1.5f), style = stroke)
+                }
                 ToolIcon.Preview -> { drawRoundRect(tint, Offset(2f, 3f), Size(20f, 15f), CornerRadius(2f), style = stroke); line(12f, 18f, 12f, 22f); line(7f, 22f, 17f, 22f) }
                 ToolIcon.Plus -> { line(12f, 4f, 12f, 20f); line(4f, 12f, 20f, 12f) }
                 ToolIcon.Close -> { line(5f, 5f, 19f, 19f); line(19f, 5f, 5f, 19f) }

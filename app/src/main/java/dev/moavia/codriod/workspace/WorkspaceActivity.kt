@@ -23,7 +23,7 @@ class WorkspaceActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            WorkspaceTheme(model.themeMode) {
+            WorkspaceTheme(model.themeMode, model.extensions.activeTheme) {
                 val darkTheme = !LocalCodeColors.current.dark
                 SideEffect {
                     window.statusBarColor = android.graphics.Color.TRANSPARENT
@@ -72,6 +72,10 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
         }
         onDispose { model.browser.fileChooser = null; model.browser.hostContext = null; model.browser.releaseViews() }
     }
+    if (model.terminalFullscreen) {
+        TerminalFullscreenPage(model, onBack = { model.terminalFullscreen = false })
+        return
+    }
     var createDialog by remember { mutableStateOf(false) }
     var newEntry by remember { mutableStateOf<String?>(null) }
     var newEntryParent by remember { mutableStateOf("") }
@@ -82,10 +86,13 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
         model.message?.let { snackbar.showSnackbar(it, withDismissAction = true); model.message = null }
     }
     BackHandler(model.project != null || model.previewOpen || model.terminalOpen || model.gitOpen ||
-        model.addonsOpen || model.agentOpen || model.githubOpen || model.agentPanelOpen || model.linuxOpen || model.cliPanels.openId != null) {
+        model.addonsOpen || model.agentOpen || model.githubOpen || model.agentPanelOpen || model.linuxOpen ||
+        model.javaOpen || model.extensionsOpen || model.cliPanels.openId != null) {
         when {
             model.cliPanels.openId != null -> model.cliPanels.openId = null
             model.linuxOpen -> model.linuxOpen = false
+            model.javaOpen -> model.javaOpen = false
+            model.extensionsOpen -> model.extensionsOpen = false
             model.agentPanelOpen -> if (model.agentSettingsOpen) model.agentSettingsOpen = false else model.agentPanelOpen = false
             model.githubOpen -> model.githubOpen = false
             model.agentOpen -> model.agentOpen = false
@@ -127,6 +134,16 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
                     onOpenCli = { id, login -> model.linuxOpen = false; model.addonsOpen = false; model.openCli(id, login) },
                     onOpenTerminal = { model.linuxOpen = false; model.addonsOpen = false; model.openUbuntuTerminal() },
                     onAskAgent = { text -> model.askAgent(text) })
+                model.javaOpen -> dev.moavia.codriod.jdk.JavaKitScreen(model.javaKit,
+                    onBack = { model.javaOpen = false },
+                    onOpenLinux = { model.javaOpen = false; model.linuxOpen = true },
+                    onOpenTerminal = { model.javaOpen = false; model.addonsOpen = false; model.openUbuntuTerminal() },
+                    onAskAgent = { text -> model.askAgent(text) })
+                model.extensionsOpen -> dev.moavia.codriod.ext.ExtensionsScreen(model.extensions,
+                    onBack = { model.extensionsOpen = false },
+                    onOpenLinux = { model.extensionsOpen = false; model.linuxOpen = true },
+                    onOpenTerminal = { model.extensionsOpen = false; model.addonsOpen = false; model.openUbuntuTerminal() },
+                    onAskAgent = { text -> model.askAgent(text) })
                 model.project == null -> WorkspaceHome(
                     model = model,
                     onCreate = { createDialog = true },
@@ -144,7 +161,16 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
                         dev.moavia.codriod.linux.LinuxPhase.Unsupported -> "Not available"
                         else -> "Set up"
                     },
-                    onOpenLinux = { model.linuxOpen = true })
+                    onOpenLinux = { model.linuxOpen = true },
+                    javaStatus = when (model.linux.phase) {
+                        dev.moavia.codriod.linux.LinuxPhase.Unsupported -> "Not available"
+                        dev.moavia.codriod.linux.LinuxPhase.Installing -> "Installing…"
+                        else -> model.javaKit.summary()
+                    },
+                    onOpenJava = { model.javaOpen = true },
+                    extStatus = if (model.linux.phase == dev.moavia.codriod.linux.LinuxPhase.Unsupported) "Not available"
+                        else model.extensions.summary(),
+                    onOpenExtensions = { model.extensionsOpen = true })
                 model.gitOpen -> GitPanel(model)
                 model.previewOpen -> WorkspacePreview(model)
                 else -> Box(Modifier.fillMaxSize()) {
@@ -197,6 +223,26 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
         } },
         dismissButton = { TextButton(onClick = { deleteEntry = null }) { Text("Cancel") } }
     ) }
+}
+
+@Composable
+private fun TerminalFullscreenPage(model: WorkspaceModel, onBack: () -> Unit) {
+    LaunchedEffect(model.project?.id) {
+        if (model.terminal == null) model.showTerminal()
+    }
+    BackHandler { onBack() }
+    Surface(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+        color = MaterialTheme.colorScheme.background) {
+        model.terminal?.let { controller ->
+            WorkspaceTerminal(
+                controller = controller,
+                modifier = Modifier.fillMaxSize(),
+                fullscreen = true,
+                projectName = model.project?.name,
+                onBack = onBack
+            )
+        }
+    }
 }
 
 @Composable

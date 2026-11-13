@@ -49,7 +49,9 @@ private data class AddonRow(val title: String, val subtitle: String, val status:
 /** Add-ons: a card per add-on with its logo and status. Codriod AI first; Linux & AI CLIs is highlighted while new. */
 @Composable
 fun AddonsScreen(agent: AgentController, onBack: () -> Unit, onOpenAgent: () -> Unit, onOpenGit: () -> Unit,
-    linuxStatus: String = "Set up", onOpenLinux: (() -> Unit)? = null) {
+    linuxStatus: String = "Set up", onOpenLinux: (() -> Unit)? = null,
+    javaStatus: String = "Set up", onOpenJava: (() -> Unit)? = null,
+    extStatus: String = "Set up", onOpenExtensions: (() -> Unit)? = null) {
     val code = LocalCodeColors.current
     val agentStatus = agent.provider?.let { p -> agent.modelId?.let { "${p.name} · $it" } } ?: "Set up"
     val rows = listOf(
@@ -58,8 +60,10 @@ fun AddonsScreen(agent: AgentController, onBack: () -> Unit, onOpenAgent: () -> 
         AddonRow("GitHub", "Your token, all repos, clone, pull, push", "Built in", true, onOpenGit, logo = "⌥", color = 0xFF24292F),
         AddonRow("Linux & AI CLIs", "Ubuntu, Node.js, Python + Claude Code, Codex, Gemini, Copilot…",
             linuxStatus, onOpenLinux != null, onOpenLinux, logo = "🐧", color = 0xFFE95420, isNew = linuxStatus == "Set up"),
-        AddonRow("Java & Kotlin", "JDK, Kotlin and Gradle tools", null, false, logo = "J"),
-        AddonRow("More extensions", "Language servers, debuggers and themes", null, false, logo = "⧉")
+        AddonRow("Java & Kotlin", "JDK, Kotlin and Gradle tools",
+            javaStatus, onOpenJava != null, onOpenJava, logo = "J", color = 0xFFF89820),
+        AddonRow("More extensions", "Language servers, debuggers and themes",
+            extStatus, onOpenExtensions != null, onOpenExtensions, logo = "⧉", color = 0xFF0EA5E9)
     )
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Row(Modifier.fillMaxWidth().height(52.dp).background(code.header).padding(horizontal = 8.dp),
@@ -74,8 +78,11 @@ fun AddonsScreen(agent: AgentController, onBack: () -> Unit, onOpenAgent: () -> 
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item { SectionTitle("INSTALLED") }
             items(rows.filter { it.available }) { AddonCard(it) }
-            item { SectionTitle("COMING SOON") }
-            items(rows.filterNot { it.available }) { AddonCard(it) }
+            val soon = rows.filterNot { it.available }
+            if (soon.isNotEmpty()) {
+                item { SectionTitle("COMING SOON") }
+                items(soon) { AddonCard(it) }
+            }
         }
     }
 }
