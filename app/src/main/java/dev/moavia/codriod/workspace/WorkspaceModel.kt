@@ -96,6 +96,10 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     val extensions = dev.moavia.codriod.ext.ExtensionsManager(application, viewModelScope, linux, javaKit)
     /** Add-ons → More extensions screen. */
     var extensionsOpen by mutableStateOf(false)
+    /** Getting Started & Workflow guide. */
+    var guideOpen by mutableStateOf(false)
+    val guideSeen: Boolean get() = prefs.getBoolean("guide_seen", false)
+    fun markGuideSeen() { if (!guideSeen) prefs.edit().putBoolean("guide_seen", true).apply() }
     /** Vertical position of the editor-edge tabs (dp from the centre), dragged by the user. */
     var edgeOffset by mutableFloatStateOf(application.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE).getFloat("edge_offset", -40f))
         private set

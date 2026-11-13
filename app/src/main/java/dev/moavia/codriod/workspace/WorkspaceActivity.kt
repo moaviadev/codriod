@@ -87,9 +87,10 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
     }
     BackHandler(model.project != null || model.previewOpen || model.terminalOpen || model.gitOpen ||
         model.addonsOpen || model.agentOpen || model.githubOpen || model.agentPanelOpen || model.linuxOpen ||
-        model.javaOpen || model.extensionsOpen || model.cliPanels.openId != null) {
+        model.javaOpen || model.extensionsOpen || model.guideOpen || model.cliPanels.openId != null) {
         when {
             model.cliPanels.openId != null -> model.cliPanels.openId = null
+            model.guideOpen -> model.guideOpen = false
             model.linuxOpen -> model.linuxOpen = false
             model.javaOpen -> model.javaOpen = false
             model.extensionsOpen -> model.extensionsOpen = false
@@ -126,6 +127,7 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
     ) { insets ->
         Box(Modifier.fillMaxSize().padding(insets)) {
             when {
+                model.guideOpen -> GettingStartedScreen(model, onBack = { model.guideOpen = false })
                 model.agentOpen -> dev.moavia.codriod.agent.AgentScreen(model.agent, model.project?.name,
                     onBack = { model.agentOpen = false }, onTakeOver = model::showAgentBrowser)
                 model.githubOpen -> GitHubScreen(model, onBack = { model.githubOpen = false })
@@ -149,7 +151,8 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
                     onCreate = { createDialog = true },
                     onOpenFolder = { openFolderLauncher.launch(null) },
                     onClone = model::showGitHub,
-                    onOpenTerminal = onOpenOriginalTerminal
+                    onOpenTerminal = onOpenOriginalTerminal,
+                    onOpenGuide = { model.guideOpen = true }
                 )
                 model.addonsOpen -> dev.moavia.codriod.agent.AddonsScreen(model.agent,
                     onBack = { model.addonsOpen = false },

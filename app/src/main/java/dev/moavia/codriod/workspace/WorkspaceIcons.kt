@@ -21,7 +21,7 @@ enum class ToolIcon {
     Folder, File, Search, Terminal, Preview, Plus, Close, Back, Run,
     Undo, Redo, Theme, Refresh, More, Delete, Edit, Check, Chevron, Git,
     Settings, Fullscreen, Paste, Copy, Cut, Clear, History, Keyboard, CodeBrackets,
-    Globe, Home, Inspect, Lock, Rotate, Star, Share, Split
+    Globe, Home, Inspect, Lock, Rotate, Star, Share, Split, Book
 }
 
 @Composable
@@ -141,6 +141,11 @@ fun ToolGlyph(kind: ToolIcon, tint: Color = MaterialTheme.colorScheme.onSurface,
                 ToolIcon.Share -> {
                     drawCircle(tint, 2.5f, Offset(18f, 5f), style = stroke); drawCircle(tint, 2.5f, Offset(6f, 12f), style = stroke)
                     drawCircle(tint, 2.5f, Offset(18f, 19f), style = stroke); line(8.2f, 10.8f, 15.8f, 6.2f); line(8.2f, 13.2f, 15.8f, 17.8f)
+                }
+                ToolIcon.Book -> {
+                    path(4f to 19f, 4f to 5f, 6f to 3f, 20f to 3f, 20f to 17f, 18f to 19f, 4f to 19f)
+                    path(4f to 19f, 18f to 19f, 20f to 21f, 6f to 21f, 4f to 19f)
+                    line(8f, 8f, 16f, 8f); line(8f, 12f, 14f, 12f)
                 }
             }
         }

@@ -97,7 +97,8 @@ fun WorkspaceHome(
     onCreate: () -> Unit,
     onOpenFolder: () -> Unit,
     onClone: () -> Unit,
-    onOpenTerminal: () -> Unit
+    onOpenTerminal: () -> Unit,
+    onOpenGuide: () -> Unit
 ) {
     var newProjectInitial by remember { mutableStateOf<String?>(null) }
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
@@ -123,8 +124,8 @@ fun WorkspaceHome(
                     onCreate = { name, template -> newProjectInitial = null; model.createProject(name, template) }
                 )
             } else {
-                if (model.projects.isEmpty()) FirstRun(model, onNew = { newProjectInitial = it ?: "Web" }, onOpenFolder, onClone, onOpenTerminal)
-                else HomeWithProjects(model, onNew = { newProjectInitial = "Web" }, onOpenFolder, onClone, onOpenTerminal)
+                if (model.projects.isEmpty()) FirstRun(model, onNew = { newProjectInitial = it ?: "Web" }, onOpenFolder, onClone, onOpenTerminal, onOpenGuide)
+                else HomeWithProjects(model, onNew = { newProjectInitial = "Web" }, onOpenFolder, onClone, onOpenTerminal, onOpenGuide)
             }
         }
     }
@@ -269,7 +270,7 @@ private fun greeting(): String = when (Calendar.getInstance().get(Calendar.HOUR_
 }
 
 @Composable
-private fun HomeWithProjects(model: WorkspaceModel, onNew: () -> Unit, onOpenFolder: () -> Unit, onClone: () -> Unit, onOpenTerminal: () -> Unit) {
+private fun HomeWithProjects(model: WorkspaceModel, onNew: () -> Unit, onOpenFolder: () -> Unit, onClone: () -> Unit, onOpenTerminal: () -> Unit, onOpenGuide: () -> Unit) {
     val p = LocalHomePalette.current
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("All") }
@@ -317,6 +318,23 @@ private fun HomeWithProjects(model: WorkspaceModel, onNew: () -> Unit, onOpenFol
                         ActionTile("Open folder", ToolIcon.Folder, SolidColor(p.success), Modifier.weight(1f), p, onOpenFolder)
                         ActionTile("GitHub", ToolIcon.Git, SolidColor(if (p.dark) Color(0xFF30363D) else Color(0xFF24292F)), Modifier.weight(1f), p, onClone)
                         ActionTile("Codriod AI", ToolIcon.CodeBrackets, Brush.linearGradient(listOf(p.primary2, p.accent)), Modifier.weight(1f), p) { model.agentOpen = true }
+                    }
+                }
+                item {
+                    Row(
+                        Modifier.padding(horizontal = 16.dp, vertical = 2.dp).fillMaxWidth().glass(p, RoundedCornerShape(18.dp), elevated = false)
+                            .clickable(onClick = onOpenGuide).padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(Brush.linearGradient(listOf(p.primary, p.primary2))), contentAlignment = Alignment.Center) {
+                            ToolGlyph(ToolIcon.Book, Color.White, Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Getting Started & Workflow", color = p.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Overview, workflows, tutorials, and ChatGPT help", color = p.muted, fontSize = 11.5.sp)
+                        }
+                        ToolGlyph(ToolIcon.Chevron, p.muted, Modifier.size(16.dp))
                     }
                 }
                 model.continueInfo?.takeIf { query.isBlank() }?.let { info ->
@@ -467,7 +485,7 @@ private fun ProjectRow(project: Project, p: HomePalette, onClick: () -> Unit, on
 }
 
 @Composable
-private fun FirstRun(model: WorkspaceModel, onNew: (String?) -> Unit, onOpenFolder: () -> Unit, onClone: () -> Unit, onOpenTerminal: () -> Unit) {
+private fun FirstRun(model: WorkspaceModel, onNew: (String?) -> Unit, onOpenFolder: () -> Unit, onClone: () -> Unit, onOpenTerminal: () -> Unit, onOpenGuide: () -> Unit) {
     val p = LocalHomePalette.current
     Column(Modifier.fillMaxSize()) {
         TopBar(model, onOpenTerminal)
@@ -488,6 +506,8 @@ private fun FirstRun(model: WorkspaceModel, onNew: (String?) -> Unit, onOpenFold
                 GlassActionButton("Open folder", ToolIcon.Folder, p, p.success, onOpenFolder)
                 Spacer(Modifier.height(10.dp))
                 GlassActionButton("Clone from GitHub", ToolIcon.Git, p, p.primary, onClone)
+                Spacer(Modifier.height(10.dp))
+                GlassActionButton("Getting Started & Workflow", ToolIcon.Book, p, p.primary2, onOpenGuide)
                 Spacer(Modifier.height(14.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     QuickAction("Website", ToolIcon.Globe, p, p.primary, Modifier.weight(1f)) { onNew("Web") }
