@@ -41,8 +41,22 @@ import java.util.Locale
 private val C = AgentColors
 private val Mono = FontFamily.Monospace
 
+// ---- improved color palette --------------------------------------------------------------------------
+private val TextPrimary = Color(0xFFE8E8ED)
+private val TextSecondary = Color(0xFFB0B0B8)
+private val TextDim = Color(0xFF808090)
+private val CodeBg = Color(0xFF141418)
+private val CodeBorder = Color(0xFF2E2E36)
+private val HeaderBg = Color(0xFF1C1C22)
+private val UserBubbleBg = Color(0xFF2D2D38)
+private val UserBubbleBorder = Color(0xFF3A3A48)
+private val ComposerBg = Color(0xFF1E1E24)
+private val ComposerBorder = Color(0xFF404050)
+private val StopPillBg = Color(0xFF3A1515)
+private val StopPillText = Color(0xFFFF8A8A)
+
 @Composable
-private fun Logo(panel: CliPanel, size: Int = 24) {
+private fun Logo(panel: CliPanel, size: Int = 28) {
     Box(Modifier.size(size.dp).clip(RoundedCornerShape((size / 3.4).dp)).background(Color(panel.cli.color)), contentAlignment = Alignment.Center) {
         Text(panel.cli.name.take(1), color = Color.White, fontWeight = FontWeight.Bold, fontSize = (size * 0.5).sp)
     }
@@ -109,24 +123,26 @@ fun CliPanelView(panel: CliPanel, onClose: () -> Unit, expanded: Boolean, onTogg
         Meter(panel) { sheet = "usage" }
         HorizontalDivider(color = Color(0xFF26262C))
         // ---- body
+        val needsLogin = s.account?.signedIn == false || s.login != null
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
                 !s.connected && s.error != null -> StartError(panel)
                 !s.connected -> Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                     CircularProgressIndicator(color = C.Violet); Text(s.status, color = C.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
                 }
-                s.account?.signedIn == false || s.login != null -> LoginView(panel)
+                needsLogin -> LoginView(panel)
                 else -> Conversation(panel)
             }
         }
         s.approval?.let { ApprovalView(it) }
         s.error?.takeIf { s.connected }?.let { err ->
-            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF2A1515)).padding(10.dp)) {
-                Text(err, color = Color(0xFFFCA5A5), fontSize = 12.sp, modifier = Modifier.weight(1f))
-                Text("✕", color = C.Dim, modifier = Modifier.clickable { s.error = null }.padding(start = 8.dp))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF2E1515)).padding(11.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(err, color = StopPillText, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
+                Text("\u2715", color = TextDim, modifier = Modifier.clip(CircleShape).clickable { s.error = null }.padding(6.dp))
             }
         }
-        if (s.connected && s.account?.signedIn != false) Composer(panel) { sheet = "commands" }
+        if (s.connected && !needsLogin) Composer(panel) { sheet = "commands" }
     }
     when (sheet) {
         "model" -> ModelSheet(panel) { sheet = null }
@@ -139,7 +155,7 @@ fun CliPanelView(panel: CliPanel, onClose: () -> Unit, expanded: Boolean, onTogg
 
 @Composable
 private fun IconText(text: String, onClick: () -> Unit) {
-    Text(text, color = C.Muted, fontSize = 15.sp, modifier = Modifier.clip(CircleShape).clickable(onClick = onClick).padding(horizontal = 6.dp, vertical = 4.dp))
+    Text(text, color = Color(0xFF9090A0), fontSize = 16.sp, modifier = Modifier.clip(CircleShape).clickable(onClick = onClick).padding(horizontal = 7.dp, vertical = 5.dp))
 }
 
 private fun resetText(epoch: Long?): String {
@@ -188,13 +204,20 @@ private fun Bar(label: String, percent: Int, color: Color, modifier: Modifier) {
 
 @Composable
 private fun StartError(panel: CliPanel) {
-    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("⌨", fontSize = 30.sp)
-        Text("${panel.cli.name} could not start its chat mode", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
-        Text(panel.state.error.orEmpty(), color = C.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
-        Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { panel.restart() }, colors = ButtonDefaults.buttonColors(containerColor = C.Violet)) { Text("Try again") }
-            OutlinedButton(onClick = { panel.openTerminal() }) { Text("Open in terminal") }
+    val err = panel.state.error.orEmpty()
+    val isAuthError = err.lowercase().let { it.contains("auth") || it.contains("sign in") || it.contains("login") || it.contains("not authenticated") }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("\u2328", fontSize = 34.sp)
+        Text("${panel.cli.name} could not start", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 10.dp))
+        Text(err, color = TextSecondary, fontSize = 12.5.sp, modifier = Modifier.padding(top = 8.dp))
+        Column(Modifier.padding(top = 14.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { panel.restart() }, modifier = Modifier.fillMaxWidth(0.7f), colors = ButtonDefaults.buttonColors(containerColor = C.Violet)) { Text("Try again") }
+            if (isAuthError) {
+                OutlinedButton(onClick = { panel.openTerminal(panel.cli.loginCommand ?: panel.cli.command) }, modifier = Modifier.fillMaxWidth(0.7f)) {
+                    Text("Sign in in the terminal")
+                }
+            }
+            OutlinedButton(onClick = { panel.openTerminal() }, modifier = Modifier.fillMaxWidth(0.7f)) { Text("Open in terminal") }
         }
     }
 }
@@ -207,51 +230,88 @@ private fun LoginView(panel: CliPanel) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     var apiKey by remember { mutableStateOf("") }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Logo(panel, 46)
-        Text("Sign in to ${panel.cli.name}", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
-        Text(panel.cli.signIn, color = C.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+
+    fun openBrowser(url: String) {
+        try { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        catch (_: Exception) { s.login = s.login?.copy(error = "Could not open browser. Copy the URL and open it manually.") }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Logo(panel, 52)
+        Text("Sign in to ${panel.cli.name}", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
+        Text(panel.cli.signIn, color = TextSecondary, fontSize = 12.5.sp, modifier = Modifier.padding(top = 4.dp))
         val login = s.login
         if (login != null) {
             Column(Modifier.padding(top = 16.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(C.Card).padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 login.userCode?.let { code ->
-                    Text("YOUR ONE-TIME CODE", color = C.Dim, fontSize = 10.sp)
-                    Text(code, color = Color.White, fontFamily = Mono, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+                    Text("YOUR ONE-TIME CODE", color = TextDim, fontSize = 10.5.sp, letterSpacing = 1.sp)
+                    Text(code, color = Color.White, fontFamily = Mono, fontSize = 30.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
                     Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { clipboard.setText(AnnotatedString(code)) }) { Text("⧉ Copy") }
-                        login.url?.let { url -> Button(onClick = { runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))) } }) { Text("Open page ↗") } }
+                        OutlinedButton(onClick = { clipboard.setText(AnnotatedString(code)) }) { Text("Copy code") }
+                        login.url?.let { url -> Button(onClick = { openBrowser(url) }, colors = ButtonDefaults.buttonColors(containerColor = C.Violet)) { Text("Open page ↗") } }
                     }
                 } ?: login.url?.let { url ->
-                    Button(onClick = { runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))) } },
-                        modifier = Modifier.fillMaxWidth()) { Text("Open the sign-in page again ↗") }
+                    Button(onClick = { openBrowser(url) }, modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = C.Violet)) { Text("Open sign-in page ↗") }
+                    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(url)) }, modifier = Modifier.padding(top = 6.dp).fillMaxWidth()) { Text("Copy URL") }
                 }
                 if (login.message.isNotBlank()) Text(login.message, color = C.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
-                login.error?.let { Text(it, color = C.Red, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp)) }
+                login.error?.let { err ->
+                    Text(err, color = C.Red, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                    // Show retry button on error
+                    if (panel.backend is AcpBackend) Button(onClick = { s.login = null }, modifier = Modifier.padding(top = 8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = C.Violet)) { Text("Try again") }
+                }
                 if (login.waiting && login.error == null) Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Text("  Waiting for you to finish…", color = C.Muted, fontSize = 12.sp)
                 }
-                val backend = panel.backend
-                if (backend is AcpBackend) Button(onClick = { panel.act { backend.retryAfterLogin() } }, modifier = Modifier.padding(top = 12.dp),
+                val acpBackend = panel.backend as? AcpBackend
+                if (acpBackend != null && login.error == null) Button(onClick = { panel.act { acpBackend.retryAfterLogin() } }, modifier = Modifier.padding(top = 12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = C.Violet)) { Text("I'm signed in") }
                 TextButton(onClick = { s.login = null }) { Text("Cancel", color = C.Dim) }
             }
         } else when (val backend = panel.backend) {
             is CodexBackend -> {
-                Button(onClick = { panel.act { login("chatgpt") } }, modifier = Modifier.padding(top = 16.dp).fillMaxWidth().height(46.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF111111))) { Text("Sign in with ChatGPT") }
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = { panel.act { login("chatgpt") } }, modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF111111))) { Text("Sign in with ChatGPT", fontWeight = FontWeight.SemiBold) }
                 OutlinedButton(onClick = { panel.act { login("device") } }, modifier = Modifier.padding(top = 8.dp).fillMaxWidth()) { Text("Sign in with a device code") }
                 OutlinedTextField(apiKey, { apiKey = it }, label = { Text("…or an OpenAI API key") }, singleLine = true,
                     modifier = Modifier.padding(top = 12.dp).fillMaxWidth(), textStyle = LocalTextStyle.current.copy(color = Color.White))
-                if (apiKey.isNotBlank()) Button(onClick = { val k = apiKey; apiKey = ""; panel.act { login("apiKey", k) } }, modifier = Modifier.padding(top = 6.dp)) { Text("Use API key") }
+                if (apiKey.isNotBlank()) Button(onClick = { val k = apiKey; apiKey = ""; panel.act { login("apiKey", k) } }, modifier = Modifier.padding(top = 6.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = C.Violet)) { Text("Use API key") }
                 Text("Opens OpenAI's own page in your browser. Codex keeps the login on this phone, in Ubuntu.", color = C.Dim, fontSize = 11.sp,
                     modifier = Modifier.padding(top = 10.dp))
             }
             is AcpBackend -> {
-                backend.authOptions().forEach { (id, name) ->
-                    Button(onClick = { panel.act { login(id) } }, modifier = Modifier.padding(top = 10.dp).fillMaxWidth()) { Text(name) }
+                val options = backend.authOptions()
+                Spacer(Modifier.height(8.dp))
+                if (options.isNotEmpty()) {
+                    options.forEach { (id, name) ->
+                        Button(onClick = { panel.act { login(id) } }, modifier = Modifier.padding(top = 8.dp).fillMaxWidth().height(46.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = C.Violet)) { Text(name) }
+                    }
+                    HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color(0xFF2A2A33))
                 }
-                OutlinedButton(onClick = { panel.openTerminal(panel.cli.loginCommand ?: panel.cli.command); s.login = CliLogin(message = "Finish signing in in the terminal, then come back and tap “I'm signed in”.") },
-                    modifier = Modifier.padding(top = 10.dp).fillMaxWidth()) { Text("Sign in in the terminal (${panel.cli.loginCommand ?: panel.cli.command})") }
+                // Terminal sign-in: always available, more prominent when no auth methods
+                val termCmd = panel.cli.loginCommand ?: panel.cli.command
+                if (options.isEmpty()) {
+                    // Primary action when no auth buttons
+                    Button(onClick = {
+                        panel.openTerminal(termCmd)
+                        s.login = CliLogin(message = "Finish signing in in the terminal, then come back and tap \u201cI\u2019m signed in\u201d.")
+                    }, modifier = Modifier.fillMaxWidth().height(46.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = C.Violet)) { Text("Sign in in the terminal") }
+                    Text("Run  $termCmd  to sign in, then come back.", color = C.Muted, fontFamily = Mono, fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp))
+                } else {
+                    OutlinedButton(onClick = {
+                        panel.openTerminal(termCmd)
+                        s.login = CliLogin(message = "Finish signing in in the terminal, then come back and tap \u201cI\u2019m signed in\u201d.")
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Sign in in the terminal ($termCmd)") }
+                }
+                // Retry / "I'm already signed in" button
+                OutlinedButton(onClick = { panel.act { backend.retryAfterLogin() } }, modifier = Modifier.padding(top = 8.dp).fillMaxWidth()) { Text("I'm already signed in") }
                 Text("The CLI's own sign-in opens in your browser. Codriod never sees your password.", color = C.Dim, fontSize = 11.sp, modifier = Modifier.padding(top = 10.dp))
             }
         }
@@ -268,24 +328,25 @@ private fun Conversation(panel: CliPanel) {
     val lastSize = when (last) { is CliItem.Agent -> last.text.length; is CliItem.Command -> last.output.length; is CliItem.Reasoning -> last.text.length; else -> 0 }
     LaunchedEffect(s.items.size, lastSize) { if (s.items.isNotEmpty()) list.animateScrollToItem(s.items.size) }
     if (s.items.isEmpty()) {
-        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-            Logo(panel, 44)
-            Text(panel.cli.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
-            Text(s.account?.label?.takeIf { it.isNotBlank() }?.let { "Signed in · $it" + (s.account?.plan?.let { p -> " · $p" } ?: "") } ?: s.status,
-                color = C.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-            Text("Ask about this project, or tell ${panel.cli.name} what to build. Steps, diffs and command output show here.", color = C.Dim, fontSize = 12.sp,
-                modifier = Modifier.padding(top = 12.dp))
+        Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+            Logo(panel, 56)
+            Text(panel.cli.name, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
+            Text(s.account?.label?.takeIf { it.isNotBlank() }?.let { "Signed in \u00B7 $it" + (s.account?.plan?.let { p -> " \u00B7 $p" } ?: "") } ?: s.status,
+                color = TextSecondary, fontSize = 12.5.sp, modifier = Modifier.padding(top = 4.dp))
+            Text("Ask about this project, or tell ${panel.cli.name} what to build.", color = TextDim, fontSize = 13.sp,
+                modifier = Modifier.padding(top = 14.dp).widthIn(max = 260.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
         return
     }
-    LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         items(s.items, key = { it.id }) { item -> ItemView(item) }
         if (s.running) item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp, color = C.VioletSoft)
-                Text("  ${panel.cli.name} is working…", color = C.Muted, fontSize = 12.sp)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = C.VioletSoft)
+                Text("  ${panel.cli.name} is working\u2026", color = TextSecondary, fontSize = 13.sp)
                 Spacer(Modifier.weight(1f))
-                Text("■ Stop", color = C.Red, fontSize = 12.sp, modifier = Modifier.clickable { panel.act { interrupt() } }.padding(4.dp))
+                Text("\u25A0 Stop", color = StopPillText, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(StopPillBg).clickable { panel.act { interrupt() } }.padding(horizontal = 10.dp, vertical = 5.dp))
             }
         }
     }
@@ -295,75 +356,102 @@ private fun Conversation(panel: CliPanel) {
 private fun ItemView(item: CliItem) {
     when (item) {
         is CliItem.User -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Column(Modifier.widthIn(max = 300.dp).clip(RoundedCornerShape(14.dp, 14.dp, 4.dp, 14.dp)).background(Color(0xFF2A2A33)).padding(horizontal = 11.dp, vertical = 8.dp)) {
-                Text(item.text, color = C.Text, fontSize = 13.sp)
-                if (item.images.isNotEmpty()) Text("🖼 ${item.images.size} image" + if (item.images.size > 1) "s" else "", color = C.Muted, fontSize = 11.sp)
+            Column(Modifier.widthIn(max = 320.dp).clip(RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)).background(UserBubbleBg)
+                .border(1.dp, UserBubbleBorder, RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)).padding(horizontal = 12.dp, vertical = 9.dp)) {
+                Text(item.text, color = TextPrimary, fontSize = 13.5.sp)
+                if (item.images.isNotEmpty()) Text("\uD83D\uDDBC ${item.images.size} image" + if (item.images.size > 1) "s" else "",
+                    color = TextSecondary, fontSize = 11.5.sp, modifier = Modifier.padding(top = 3.dp))
             }
         }
         is CliItem.Agent -> if (item.text.isNotBlank()) MarkdownBlock(item.text)
-        is CliItem.Reasoning -> if (item.text.isNotBlank()) {
+        is CliItem.Reasoning -> if (item.text.isNotBlank() || !item.done) {
             var open by remember { mutableStateOf(false) }
-            Column(Modifier.fillMaxWidth().clickable { open = !open }.border(width = 0.dp, color = Color.Transparent).padding(start = 2.dp)) {
-                Text((if (open) "▾ " else "▸ ") + "Thinking" + if (!item.done) "…" else "", color = C.Dim, fontSize = 11.5.sp, fontStyle = FontStyle.Italic)
-                Text(if (open) item.text else item.text.lineSequence().lastOrNull { it.isNotBlank() }.orEmpty().take(160), color = C.Dim, fontSize = 11.5.sp,
-                    fontStyle = FontStyle.Italic, maxLines = if (open) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis)
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { open = !open }.padding(horizontal = 4.dp, vertical = 3.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (open) "\u25BE " else "\u25B8 ", color = TextDim, fontSize = 12.sp)
+                    Text("Thinking" + if (!item.done) "\u2026" else "", color = TextDim, fontSize = 12.sp, fontStyle = FontStyle.Italic)
+                    if (!item.done) { Spacer(Modifier.width(6.dp)); CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp, color = C.VioletSoft) }
+                }
+                if (open) Text(item.text, color = TextDim, fontSize = 12.sp, fontStyle = FontStyle.Italic, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
             }
         }
         is CliItem.Command -> CommandView(item)
         is CliItem.FileEdit -> item.changes.forEach { DiffView(it, item.status) }
-        is CliItem.Tool -> Column {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(toolIcon(item.kind) + " ", fontSize = 12.sp)
-                Text(item.title, color = C.Muted, fontSize = 11.5.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                StatusMark(item.status)
+        is CliItem.Tool -> {
+            var detailOpen by remember { mutableStateOf(false) }
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(CodeBg).border(1.dp, CodeBorder, RoundedCornerShape(10.dp))
+                .clickable(enabled = item.detail.isNotBlank()) { detailOpen = !detailOpen }.padding(horizontal = 10.dp, vertical = 7.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(toolIcon(item.kind) + " ", fontSize = 13.sp)
+                    Text(toolVerb(item.kind), color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(end = 6.dp))
+                    Text(item.title, color = TextPrimary, fontSize = 12.sp, fontFamily = Mono, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(6.dp))
+                    StatusMark(item.status)
+                }
+                if (detailOpen && item.detail.isNotBlank()) Text(item.detail.take(1000), color = TextDim, fontSize = 11.5.sp, fontFamily = Mono, maxLines = 12,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 2.dp, top = 6.dp))
             }
-            if (item.detail.isNotBlank()) Text(item.detail.take(600), color = C.Dim, fontSize = 11.sp, fontFamily = Mono, maxLines = 6, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 20.dp, top = 2.dp))
         }
-        is CliItem.Plan -> Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFF1D1D22)).border(1.dp, Color(0xFF2C2C33), RoundedCornerShape(10.dp)).padding(10.dp)) {
-            Text("Plan", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
-            item.explanation?.let { Text(it, color = C.Muted, fontSize = 11.sp) }
+        is CliItem.Plan -> Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFF1A1A22))
+            .border(1.5.dp, C.Violet.copy(alpha = 0.3f), RoundedCornerShape(10.dp)).padding(12.dp)) {
+            Text("Plan", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            item.explanation?.let { Text(it, color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp)) }
             item.steps.forEach { st ->
-                Text((when (st.status) { "completed" -> "✓ "; "in_progress" -> "◉ "; else -> "○ " }) + st.text, fontSize = 11.5.sp,
-                    color = when (st.status) { "completed" -> C.Green; "in_progress" -> Color(0xFF93C5FD); else -> C.Dim }, modifier = Modifier.padding(top = 3.dp))
+                Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.Top) {
+                    Text(when (st.status) { "completed" -> "\u2713"; "in_progress" -> "\u25CF"; else -> "\u25CB" }, fontSize = 13.sp,
+                        color = when (st.status) { "completed" -> C.Green; "in_progress" -> Color(0xFF93C5FD); else -> Color(0xFF505060) },
+                        modifier = Modifier.width(20.dp))
+                    Text(st.text, fontSize = 12.5.sp, fontWeight = if (st.status == "in_progress") FontWeight.SemiBold else FontWeight.Normal,
+                        color = when (st.status) { "completed" -> TextSecondary; "in_progress" -> TextPrimary; else -> Color(0xFF707080) })
+                }
             }
         }
-        is CliItem.Notice -> Text(item.text, color = if (item.level == "warning" || item.level == "error") C.Amber else C.Muted, fontSize = 11.5.sp)
+        is CliItem.Notice -> Text(item.text, color = if (item.level == "warning" || item.level == "error") C.Amber else TextSecondary, fontSize = 12.sp)
     }
 }
 
 private fun toolIcon(kind: String) = when (kind) {
-    "read" -> "📄"; "search" -> "🔎"; "fetch" -> "🌐"; "think" -> "💭"; "edit" -> "✎"; "delete" -> "🗑"; "move" -> "↔"; "mcp" -> "🔌"; "execute" -> "⌘"; else -> "•"
+    "read" -> "\uD83D\uDCC4"; "search" -> "\uD83D\uDD0D"; "fetch" -> "\uD83C\uDF10"; "think" -> "\uD83D\uDCAD"; "edit", "write" -> "\u270E"; "delete" -> "\uD83D\uDDD1"; "move" -> "\u21C4"; "mcp" -> "\uD83D\uDD0C"; "execute" -> "\u25B6"; else -> "\u2022"
+}
+
+private fun toolVerb(kind: String) = when (kind) {
+    "read" -> "Read"; "search" -> "Search"; "fetch" -> "Fetch"; "think" -> "Think"; "edit" -> "Edit"; "write" -> "Write"; "delete" -> "Delete"; "move" -> "Move"; "mcp" -> "MCP"; "execute" -> "Run"; else -> ""
 }
 
 @Composable
 private fun StatusMark(status: ItemStatus) {
     when (status) {
-        ItemStatus.Running -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp, color = C.VioletSoft)
-        ItemStatus.Done -> Text("✓", color = C.Green, fontSize = 11.sp)
-        ItemStatus.Failed -> Text("✗", color = C.Red, fontSize = 11.sp)
-        ItemStatus.Declined -> Text("declined", color = C.Amber, fontSize = 10.sp)
+        ItemStatus.Running -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = C.VioletSoft)
+        ItemStatus.Done -> Text("\u2713", color = C.Green, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        ItemStatus.Failed -> Text("\u2717", color = C.Red, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        ItemStatus.Declined -> Text("declined", color = C.Amber, fontSize = 11.sp)
     }
 }
 
 @Composable
 private fun CommandView(item: CliItem.Command) {
     var open by remember { mutableStateOf(true) }
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFF0F0F12)).border(1.dp, Color(0xFF2A2A30), RoundedCornerShape(10.dp))) {
-        Row(Modifier.fillMaxWidth().background(Color(0xFF17171B)).clickable { open = !open }.padding(horizontal = 9.dp, vertical = 6.dp),
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(CodeBg).border(1.dp, CodeBorder, RoundedCornerShape(10.dp))) {
+        Row(Modifier.fillMaxWidth().background(HeaderBg).clickable { open = !open }.padding(horizontal = 11.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            Text("⌘ ", color = C.Muted, fontSize = 11.sp)
-            Text(item.command, color = C.Text, fontFamily = Mono, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text("\u25B6 ", color = TextSecondary, fontSize = 12.sp)
+            Text(item.command, color = TextPrimary, fontFamily = Mono, fontSize = 11.5.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(6.dp))
             when {
-                item.status == ItemStatus.Running -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
-                item.status == ItemStatus.Declined -> Text("declined", color = C.Amber, fontSize = 10.sp)
-                else -> Text("exit ${item.exitCode ?: if (item.status == ItemStatus.Done) 0 else 1}", fontSize = 10.5.sp,
-                    color = if ((item.exitCode ?: 0) == 0 && item.status == ItemStatus.Done) C.Green else C.Red)
+                item.status == ItemStatus.Running -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = C.VioletSoft)
+                item.status == ItemStatus.Declined -> Text("declined", color = C.Amber, fontSize = 11.sp)
+                else -> {
+                    val code = item.exitCode ?: if (item.status == ItemStatus.Done) 0 else 1
+                    val ok = code == 0 && item.status == ItemStatus.Done
+                    Text("exit $code", fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        color = if (ok) C.Green else C.Red,
+                        modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(if (ok) Color(0xFF0E2E1A) else Color(0xFF2E1515)).padding(horizontal = 6.dp, vertical = 2.dp))
+                }
             }
         }
         if (open && item.output.isNotBlank()) SelectionContainer {
-            Text(item.output.lines().takeLast(14).joinToString("\n").takeLast(3000), color = Color(0xFFD4D4D8), fontFamily = Mono, fontSize = 10.3.sp,
-                lineHeight = 15.sp, modifier = Modifier.padding(9.dp))
+            Text(item.output.lines().takeLast(20).joinToString("\n").takeLast(5000), color = Color(0xFFD8D8DE), fontFamily = Mono, fontSize = 11.5.sp,
+                lineHeight = 17.sp, modifier = Modifier.padding(11.dp))
         }
     }
 }
@@ -373,26 +461,26 @@ private fun DiffView(change: FileChange, status: ItemStatus) {
     var open by remember { mutableStateOf(true) }
     val lines = change.diff.lines().filterNot { it.startsWith("---") || it.startsWith("+++") || it.startsWith("diff ") || it.startsWith("index ") }
     val added = lines.count { it.startsWith("+") }; val removed = lines.count { it.startsWith("-") }
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFF0F0F12)).border(1.dp, Color(0xFF2A2A30), RoundedCornerShape(10.dp))) {
-        Row(Modifier.fillMaxWidth().background(Color(0xFF17171B)).clickable { open = !open }.padding(horizontal = 9.dp, vertical = 6.dp),
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(CodeBg).border(1.dp, CodeBorder, RoundedCornerShape(10.dp))) {
+        Row(Modifier.fillMaxWidth().background(HeaderBg).clickable { open = !open }.padding(horizontal = 11.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            Text(when (change.kind) { "add" -> "＋ "; "delete" -> "🗑 "; else -> "✎ " }, fontSize = 11.sp, color = C.Muted)
-            Text(change.path, color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            Text("  +$added", color = C.Green, fontSize = 11.sp); Text(" −$removed", color = C.Red, fontSize = 11.sp)
+            Text(when (change.kind) { "add" -> "\uFF0B "; "delete" -> "\uD83D\uDDD1 "; else -> "\u270E " }, fontSize = 12.sp, color = TextSecondary)
+            Text(change.path, color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text("  +$added", color = C.Green, fontSize = 12.sp); Text(" \u2212$removed", color = C.Red, fontSize = 12.sp)
             Spacer(Modifier.weight(1f))
             StatusMark(status)
         }
         if (open) Column(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp)) {
-            lines.take(80).forEach { l ->
+            lines.take(100).forEach { l ->
                 val (fg, bg) = when {
-                    l.startsWith("+") -> Color(0xFF86EFAC) to Color(0x2222C55E)
-                    l.startsWith("-") -> Color(0xFFFCA5A5) to Color(0x22EF4444)
-                    l.startsWith("@@") -> C.Dim to Color.Transparent
-                    else -> Color(0xFFD4D4D8) to Color.Transparent
+                    l.startsWith("+") -> Color(0xFF86EFAC) to Color(0xFF1A2E1A)
+                    l.startsWith("-") -> Color(0xFFFCA5A5) to Color(0xFF2E1A1A)
+                    l.startsWith("@@") -> Color(0xFF7070A0) to Color.Transparent
+                    else -> Color(0xFFD0D0D8) to Color.Transparent
                 }
-                Text(l.ifEmpty { " " }, color = fg, fontFamily = Mono, fontSize = 10.3.sp, softWrap = false, modifier = Modifier.background(bg).padding(horizontal = 9.dp))
+                Text(l.ifEmpty { " " }, color = fg, fontFamily = Mono, fontSize = 11.5.sp, softWrap = false, modifier = Modifier.background(bg).padding(horizontal = 11.dp, vertical = 0.5.dp))
             }
-            if (lines.size > 80) Text("… ${lines.size - 80} more lines", color = C.Dim, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 9.dp))
+            if (lines.size > 100) Text("\u2026 ${lines.size - 100} more lines", color = TextDim, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 11.dp, vertical = 4.dp))
         }
     }
 }
@@ -425,38 +513,39 @@ private fun ApprovalView(a: CliApproval) {
 private fun Composer(panel: CliPanel, onCommands: () -> Unit) {
     val s = panel.state
     val photos = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-        // Copy picked images to a private file so the backend can read them by path.
         uris.take(4).forEach { uri -> panel.attachUri(uri) }
     }
-    Column(Modifier.padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp))
-        .background(Color(0xFF202026)).border(1.dp, Color(0xFF3A3A42), RoundedCornerShape(16.dp)).padding(horizontal = 10.dp, vertical = 9.dp)) {
+    Column(Modifier.padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(18.dp))
+        .background(ComposerBg).border(1.5.dp, ComposerBorder, RoundedCornerShape(18.dp)).padding(horizontal = 12.dp, vertical = 10.dp)) {
         if (panel.attachments.isNotEmpty()) Row(Modifier.padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             panel.attachments.toList().forEach { path ->
-                Text("🖼 ${path.substringAfterLast('/').take(14)} ✕", color = C.Muted, fontSize = 11.sp,
-                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(Color(0xFF2A2A31)).clickable { panel.attachments.remove(path) }.padding(6.dp))
+                Text("\uD83D\uDDBC ${path.substringAfterLast('/').take(14)} \u2717", color = TextSecondary, fontSize = 11.5.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(Color(0xFF2A2A34)).clickable { panel.attachments.remove(path) }.padding(7.dp))
             }
         }
-        Box(Modifier.fillMaxWidth().heightIn(min = 30.dp, max = 150.dp)) {
+        Box(Modifier.fillMaxWidth().heightIn(min = 40.dp, max = 180.dp)) {
             if (panel.draft.isEmpty()) Text(when {
-                s.approval != null -> "Type yes / no…"
-                s.running && s.features.steer -> "Steer ${panel.cli.name} while it works…"
-                s.running -> "${panel.cli.name} is working…"
-                else -> "Ask ${panel.cli.name}…"
-            }, color = C.Dim, fontSize = 13.sp)
-            BasicTextField(panel.draft, { panel.draft = it }, textStyle = LocalTextStyle.current.copy(color = Color.White, fontSize = 13.sp),
+                s.approval != null -> "Type yes / no\u2026"
+                s.running && s.features.steer -> "Steer ${panel.cli.name} while it works\u2026"
+                s.running -> "${panel.cli.name} is working\u2026"
+                else -> "Ask ${panel.cli.name}\u2026"
+            }, color = Color(0xFF606070), fontSize = 14.sp)
+            BasicTextField(panel.draft, { panel.draft = it }, textStyle = LocalTextStyle.current.copy(color = Color.White, fontSize = 14.sp),
                 cursorBrush = SolidColor(C.VioletSoft), modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()))
         }
-        Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (s.features.images) Pill("🖼") { photos.launch("image/*") }
-            Pill("/") { onCommands() }
-            Pill("⌨") { panel.openTerminal() }
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (s.features.images) Pill("\uD83D\uDDBC Image") { photos.launch("image/*") }
+            Pill("/ Commands") { onCommands() }
+            Pill("\u2328 Terminal") { panel.openTerminal() }
             Spacer(Modifier.weight(1f))
             val canSend = panel.draft.isNotBlank() || panel.attachments.isNotEmpty()
             val stop = s.running && !canSend
-            Box(Modifier.size(34.dp).clip(CircleShape).background(when { stop -> Color(0xFF3F3F46); canSend -> Color.White; else -> Color(0xFF3F3F46) })
+            Box(Modifier.size(40.dp).clip(CircleShape)
+                .background(when { stop -> StopPillBg; canSend -> Color.White; else -> Color(0xFF3F3F46) })
+                .then(if (canSend) Modifier.border(2.dp, C.Violet, CircleShape) else Modifier)
                 .clickable(enabled = stop || canSend) { if (stop) panel.act { interrupt() } else panel.send() }, contentAlignment = Alignment.Center) {
-                if (stop) Box(Modifier.size(11.dp).background(Color.White, RoundedCornerShape(2.dp)))
-                else Text("↑", color = if (canSend) Color(0xFF111111) else C.Dim, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                if (stop) Box(Modifier.size(12.dp).background(Color.White, RoundedCornerShape(2.dp)))
+                else Text("\u2191", color = if (canSend) Color(0xFF111111) else C.Dim, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -464,8 +553,8 @@ private fun Composer(panel: CliPanel, onCommands: () -> Unit) {
 
 @Composable
 private fun Pill(text: String, onClick: () -> Unit) {
-    Text(text, fontSize = 12.sp, color = Color(0xFFD4D4D8), modifier = Modifier.clip(RoundedCornerShape(9.dp)).background(Color(0xFF2A2A31))
-        .clickable(onClick = onClick).padding(horizontal = 9.dp, vertical = 5.dp))
+    Text(text, fontSize = 12.5.sp, color = Color(0xFFC0C0C8), modifier = Modifier.heightIn(min = 36.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF2A2A34))
+        .clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 7.dp))
 }
 
 // ---- sheets ------------------------------------------------------------------------------------------------------
@@ -635,8 +724,9 @@ private fun SettingsSheet(panel: CliPanel, onDismiss: () -> Unit) {
         SheetTitle("ACCOUNT")
         Text(if (s.account?.signedIn == true) "Signed in · ${s.account?.label}" + (s.account?.plan?.let { " · $it" } ?: "") else "Not signed in", color = C.Text, fontSize = 12.5.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (panel.backend is CodexBackend && s.account?.signedIn == true) TextButton(onClick = { panel.act { logout() } }) { Text("Sign out", color = C.Red) }
-            TextButton(onClick = { panel.openTerminal(panel.cli.loginCommand) }) { Text("Sign in in the terminal") }
+            if (panel.backend is CodexBackend && s.account?.signedIn == true) TextButton(onClick = { panel.act { logout() }; onDismiss() }) { Text("Sign out", color = C.Red) }
+            if (s.account?.signedIn != true) TextButton(onClick = { s.account = CliAccount(false); s.login = null; onDismiss() }) { Text("Sign in", color = C.Violet) }
+            TextButton(onClick = { panel.openTerminal(panel.cli.loginCommand); onDismiss() }) { Text("Sign in in the terminal") }
         }
         SheetTitle("PERMISSIONS")
         CliPermission.entries.forEach { p -> Choice(p.label, p.hint, p == s.permission) { s.permission = p; if (panel.backend is CodexBackend) panel.act { setMode(p.name) } } }

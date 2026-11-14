@@ -100,9 +100,12 @@ class AcpBackend(
             state.status = "Ready"
             refreshThreads()
         } catch (error: RpcError) {
-            if (error.code == -32000) {
+            val msg = error.message.orEmpty().lowercase()
+            if (error.code == -32000 || msg.contains("auth") || msg.contains("sign in") || msg.contains("login") || msg.contains("not authenticated") || msg.contains("unauthorized")) {
                 state.account = CliAccount(false)
                 state.status = "Sign in to ${config.name}"
+                // Ensure login feature is enabled even if authMethods was empty
+                if (!state.features.login && config.loginCommand != null) state.features = state.features.copy(login = true)
             } else throw error
         }
     }
@@ -204,7 +207,10 @@ class AcpBackend(
                 "cancelled" -> state.items += CliItem.Notice("n${System.nanoTime()}", "Stopped.")
             }
         } catch (error: RpcError) {
-            if (error.code == -32000) { state.account = CliAccount(false); state.status = "Sign in to ${config.name}" }
+            val msg = error.message.orEmpty().lowercase()
+            if (error.code == -32000 || msg.contains("auth") || msg.contains("sign in") || msg.contains("login") || msg.contains("not authenticated") || msg.contains("unauthorized")) {
+                state.account = CliAccount(false); state.status = "Sign in to ${config.name}"
+            }
             throw error
         } finally {
             state.running = false
@@ -243,16 +249,56 @@ class AcpBackend(
     override suspend fun login(kind: String, apiKey: String?) {
         if (kind == "terminal" || authMethods.none { it.optString("id") == kind && it.optString("type") != "terminal" }) {
             config.loginCommand?.let { host.log("login: $it") }
-            state.login = CliLogin(message = "Finish signing in in the terminal, then tap “I'm signed in”.")
+            state.login = CliLogin(message = "Finish signing in in the terminal, then tap \u201cI\u2019m signed in\u201d.")
             return
         }
-        state.login = CliLogin(message = "Signing in…")
-        try { peer.requestObject("authenticate", JSONObject().put("methodId", kind), timeoutMs = 10 * 60_000L); state.login = null; newSessionOrLogin() }
-        catch (error: RpcError) { state.login = CliLogin(waiting = false, error = error.message) }
+        state.login = CliLogin(message = "Opening sign-in page…")
+        try {
+            val r = peer.requestObject("authenticate", JSONObject().put("methodId", kind), timeoutMs = 10 * 60_000L)
+            // Some agents return a URL to open, some return a device code flow
+            val url = r.str("url") ?: r.str("authUrl") ?: r.str("verificationUri") ?: r.str("verification_uri")
+            val userCode = r.str("userCode") ?: r.str("user_code") ?: r.str("code")
+            if (url != null || userCode != null) {
+                state.login = CliLogin(url = url, userCode = userCode,
+                    message = if (userCode != null) "Enter this code on the sign-in page." else "Complete sign-in in your browser, then come back.",
+                    waiting = true)
+                url?.let { host.openUrl(it) }
+                // Wait for the agent to confirm login via a subsequent notification or poll
+                // The login state will be cleared by retryAfterLogin() or a notification
+            } else {
+                // Immediate success (e.g. already authenticated or API key flow)
+                state.login = null
+                newSessionOrLogin()
+            }
+        } catch (error: RpcError) {
+            val msg = error.message.orEmpty()
+            // If the error contains a URL, extract and open it (some agents send auth URL in the error)
+            val urlInError = Regex("https?://[^\\s\"']+").find(msg)?.value
+            if (urlInError != null) {
+                state.login = CliLogin(url = urlInError, message = "Sign in in your browser, then tap \u201cI\u2019m signed in\u201d.", waiting = true)
+                host.openUrl(urlInError)
+            } else {
+                state.login = CliLogin(waiting = false,
+                    error = when {
+                        msg.contains("timeout", ignoreCase = true) -> "Sign-in timed out. Try again, or sign in in the terminal."
+                        msg.contains("cancel", ignoreCase = true) -> "Sign-in was cancelled."
+                        else -> msg.ifBlank { "Sign-in failed. Try again, or sign in in the terminal." }
+                    })
+            }
+        }
     }
 
-    /** After signing in in the terminal. */
-    suspend fun retryAfterLogin() { state.login = null; newSessionOrLogin() }
+    /** After signing in in the terminal or browser. */
+    suspend fun retryAfterLogin() {
+        state.login = CliLogin(message = "Checking sign-in…", waiting = true, error = null)
+        try {
+            newSessionOrLogin()
+            if (state.account?.signedIn == true) state.login = null
+            else state.login = CliLogin(waiting = false, error = "Still not signed in. Complete sign-in and try again.")
+        } catch (error: RpcError) {
+            state.login = CliLogin(waiting = false, error = error.message ?: "Sign-in check failed. Try again.")
+        }
+    }
 
     fun authOptions(): List<Pair<String, String>> = authMethods.filter { it.optString("type") != "terminal" }
         .map { it.optString("id") to it.optString("name", it.optString("id")) }

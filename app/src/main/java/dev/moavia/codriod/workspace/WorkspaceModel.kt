@@ -92,6 +92,8 @@ class WorkspaceModel(application: Application) : AndroidViewModel(application) {
     val javaKit = dev.moavia.codriod.jdk.JavaKitEnvironment(application, viewModelScope, linux)
     /** Add-ons → Java & Kotlin screen. */
     var javaOpen by mutableStateOf(false)
+    /** Add-ons → Android Development screen. */
+    var androidOpen by mutableStateOf(false)
     /** Add-ons → More extensions: language servers, debuggers, editor themes. */
     val extensions = dev.moavia.codriod.ext.ExtensionsManager(application, viewModelScope, linux, javaKit)
     /** Add-ons → More extensions screen. */

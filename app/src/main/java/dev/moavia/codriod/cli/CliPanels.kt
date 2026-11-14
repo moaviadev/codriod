@@ -106,7 +106,8 @@ class CliPanels(
                 override val guestCwd = linux.guestProjectPath(mount.second)
                 override fun guestPathForImage(hostPath: String) = linux.shareIntoUbuntu(hostPath)
                 override fun openUrl(url: String) {
-                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    catch (e: Exception) { panel.addLog("openUrl failed: ${e.message} ($url)"); panel.state.error = "Could not open browser for sign-in. Copy the URL from the log." }
                 }
                 override fun log(line: String) = panel.addLog(line)
             }

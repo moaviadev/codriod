@@ -245,17 +245,26 @@ class CodexBackend(private val host: CliHost, private val scope: CoroutineScope,
             else -> JSONObject().put("type", "chatgpt")
         }
         state.login = CliLogin(message = "Starting sign-in…")
-        val r = peer.requestObject("account/login/start", params)
-        loginId = r.str("loginId")
-        when (r.optString("type")) {
-            "chatgpt" -> {
-                val url = r.optString("authUrl")
-                state.login = CliLogin(url = url, message = "Sign in on OpenAI's page in your browser, then come back.")
-                host.openUrl(url)
+        try {
+            val r = peer.requestObject("account/login/start", params)
+            loginId = r.str("loginId")
+            when (r.optString("type")) {
+                "chatgpt" -> {
+                    val url = r.optString("authUrl")
+                    state.login = CliLogin(url = url, message = "Sign in on OpenAI's page in your browser, then come back.")
+                    host.openUrl(url)
+                }
+                "chatgptDeviceCode" -> state.login = CliLogin(url = r.optString("verificationUrl"), userCode = r.optString("userCode"),
+                    message = "Open the page and enter this code.")
+                else -> { state.login = null; refreshAccount(); loadModels(); refreshUsage() }
             }
-            "chatgptDeviceCode" -> state.login = CliLogin(url = r.optString("verificationUrl"), userCode = r.optString("userCode"),
-                message = "Open the page and enter this code.")
-            else -> { state.login = null; refreshAccount(); loadModels(); refreshUsage() }
+        } catch (error: RpcError) {
+            state.login = CliLogin(waiting = false,
+                error = when {
+                    error.message.orEmpty().contains("timeout", ignoreCase = true) -> "Sign-in timed out. Try again."
+                    error.message.orEmpty().contains("not running", ignoreCase = true) -> "Codex is not running. Tap Restart."
+                    else -> error.message ?: "Sign-in failed. Try again."
+                })
         }
     }
 
@@ -301,8 +310,12 @@ class CodexBackend(private val host: CliHost, private val scope: CoroutineScope,
             "account/login/completed" -> {
                 if (p.optBoolean("success")) {
                     state.login = null
+                    state.error = null
                     scope.launch { refreshAccount(); loadModels(); refreshUsage(); refreshThreads() }
-                } else state.login = state.login?.copy(waiting = false, error = p.str("error") ?: "Sign-in failed") ?: CliLogin(waiting = false, error = p.str("error"))
+                } else {
+                    val errMsg = p.str("error") ?: p.str("message") ?: "Sign-in failed. Try again."
+                    state.login = (state.login ?: CliLogin()).copy(waiting = false, error = errMsg)
+                }
             }
             "thread/name/updated" -> if (p.optString("threadId") == state.threadId) p.str("threadName")?.let { state.threadTitle = it }
             "thread/compacted" -> state.items += CliItem.Notice("n${System.nanoTime()}", "Context compacted: older parts were summarized.")

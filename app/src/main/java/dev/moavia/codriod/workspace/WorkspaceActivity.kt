@@ -87,12 +87,13 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
     }
     BackHandler(model.project != null || model.previewOpen || model.terminalOpen || model.gitOpen ||
         model.addonsOpen || model.agentOpen || model.githubOpen || model.agentPanelOpen || model.linuxOpen ||
-        model.javaOpen || model.extensionsOpen || model.guideOpen || model.cliPanels.openId != null) {
+        model.javaOpen || model.androidOpen || model.extensionsOpen || model.guideOpen || model.cliPanels.openId != null) {
         when {
             model.cliPanels.openId != null -> model.cliPanels.openId = null
             model.guideOpen -> model.guideOpen = false
             model.linuxOpen -> model.linuxOpen = false
             model.javaOpen -> model.javaOpen = false
+            model.androidOpen -> model.androidOpen = false
             model.extensionsOpen -> model.extensionsOpen = false
             model.agentPanelOpen -> if (model.agentSettingsOpen) model.agentSettingsOpen = false else model.agentPanelOpen = false
             model.githubOpen -> model.githubOpen = false
@@ -141,6 +142,10 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
                     onOpenLinux = { model.javaOpen = false; model.linuxOpen = true },
                     onOpenTerminal = { model.javaOpen = false; model.addonsOpen = false; model.openUbuntuTerminal() },
                     onAskAgent = { text -> model.askAgent(text) })
+                model.androidOpen -> dev.moavia.codriod.linux.AndroidDevScreen(model.linux,
+                    onBack = { model.androidOpen = false },
+                    onOpenLinux = { model.androidOpen = false; model.linuxOpen = true },
+                    onOpenTerminal = { model.androidOpen = false; model.addonsOpen = false; model.openUbuntuTerminal() })
                 model.extensionsOpen -> dev.moavia.codriod.ext.ExtensionsScreen(model.extensions,
                     onBack = { model.extensionsOpen = false },
                     onOpenLinux = { model.extensionsOpen = false; model.linuxOpen = true },
@@ -157,20 +162,26 @@ private fun WorkspaceApp(model: WorkspaceModel, onOpenOriginalTerminal: () -> Un
                 model.addonsOpen -> dev.moavia.codriod.agent.AddonsScreen(model.agent,
                     onBack = { model.addonsOpen = false },
                     onOpenAgent = { model.agentOpen = true },
-                    onOpenGit = model::showGitHub,
                     linuxStatus = when (model.linux.phase) {
-                        dev.moavia.codriod.linux.LinuxPhase.Ready -> "Ubuntu · ${model.linux.installed.size} CLIs"
-                        dev.moavia.codriod.linux.LinuxPhase.Installing -> "Installing…"
+                        dev.moavia.codriod.linux.LinuxPhase.Ready -> "Ubuntu \u00B7 ${model.linux.installed.size} CLIs"
+                        dev.moavia.codriod.linux.LinuxPhase.Installing -> "Installing\u2026"
                         dev.moavia.codriod.linux.LinuxPhase.Unsupported -> "Not available"
                         else -> "Set up"
                     },
                     onOpenLinux = { model.linuxOpen = true },
                     javaStatus = when (model.linux.phase) {
                         dev.moavia.codriod.linux.LinuxPhase.Unsupported -> "Not available"
-                        dev.moavia.codriod.linux.LinuxPhase.Installing -> "Installing…"
+                        dev.moavia.codriod.linux.LinuxPhase.Installing -> "Installing\u2026"
                         else -> model.javaKit.summary()
                     },
                     onOpenJava = { model.javaOpen = true },
+                    androidStatus = when {
+                        model.linux.phase == dev.moavia.codriod.linux.LinuxPhase.Unsupported -> "Not available"
+                        !model.linux.ready -> "Needs Ubuntu"
+                        model.linux.androidSdk != null -> "Installed" + if (model.linux.adbConnected) " \u00B7 adb" else ""
+                        else -> "Set up"
+                    },
+                    onOpenAndroid = if (model.linux.ready) {{ model.androidOpen = true }} else null,
                     extStatus = if (model.linux.phase == dev.moavia.codriod.linux.LinuxPhase.Unsupported) "Not available"
                         else model.extensions.summary(),
                     onOpenExtensions = { model.extensionsOpen = true })
